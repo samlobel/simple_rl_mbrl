@@ -39,13 +39,16 @@ UPDATE_EVERY = 1  # how often to update the network
 NUM_EPISODES = 3500
 NUM_STEPS = 10000
 
-class DQNAgent(Agent):
+class DQNAgent(Agent, nn.Module):
     """Interacts with and learns from the environment."""
 
     def __init__(self, state_size, action_size, trained_options, seed, device, name="DQN-Agent",
                  eps_start=1., tensor_log=False, lr=LR, use_double_dqn=True, gamma=GAMMA, loss_function="huber",
                  gradient_clip=None, evaluation_epsilon=0.05, exploration_method="eps-greedy",
-                 pixel_observation=False, writer=None):
+                 pixel_observation=False, writer=None,
+                 epsilon_linear_decay=100000):
+        nn.Module.__init__(self)
+
         self.state_size = state_size
         self.action_size = action_size
         self.trained_options = trained_options
@@ -79,10 +82,10 @@ class DQNAgent(Agent):
 
         # Epsilon strategy
         if exploration_method == "eps-greedy":
-            self.epsilon_schedule = GlobalEpsilonSchedule(eps_start, evaluation_epsilon) if "global" in name.lower() else OptionEpsilonSchedule(eps_start)
+            self.epsilon_schedule = GlobalEpsilonSchedule(eps_start, evaluation_epsilon, eps_lin_dec=epsilon_linear_decay) if "global" in name.lower() else OptionEpsilonSchedule(eps_start)
             self.epsilon = eps_start
         elif exploration_method == "rnd":
-            self.epsilon_schedule = GlobalEpsilonSchedule(eps_start, evaluation_epsilon)  # ConstantEpsilonSchedule(evaluation_epsilon)
+            self.epsilon_schedule = GlobalEpsilonSchedule(eps_start, evaluation_epsilon, eps_lin_dec=epsilon_linear_decay)  # ConstantEpsilonSchedule(evaluation_epsilon)
             self.epsilon = eps_start
             self.rnd = RNDModel(device=device)
         else:
@@ -160,6 +163,12 @@ class DQNAgent(Agent):
         randomly_chosen_option = random.choice(possible_option_idx)
 
         return randomly_chosen_option
+    
+    def forward(self, *args, **kwargs):
+        print("This probably shouldn't be called, I'm mainly including it so that we can have the save option work.")
+        to_return = self.act(self, *args, **kwargs)
+        print("Called the act method as a submethod, returning now.")
+        return to_return
 
     def get_best_actions_batched(self, states):
         q_values = self.get_batched_qvalues(states)
@@ -496,6 +505,7 @@ if __name__ == '__main__':
 
     state_dim = overall_mdp.env.observation_space.shape if args.pixel_observation else overall_mdp.env.observation_space.shape[0]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cpu")
 
     ddqn_agent = DQNAgent(state_size=state_dim, action_size=len(overall_mdp.actions),
                           trained_options=[], seed=args.seed, device=device,

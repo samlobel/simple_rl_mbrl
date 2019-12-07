@@ -10,11 +10,12 @@ class EpsilonSchedule:
         pass
 
 class GlobalEpsilonSchedule(EpsilonSchedule):
-    def __init__(self, eps_start, eps_end=0.05):
+    def __init__(self, eps_start, eps_end=0.05, eps_lin_dec=100000):
+        """I don't have the patience for 100000 epochs..."""
         EPS_END = eps_end
         EPS_EXPONENTIAL_DECAY = 0.999
-        EPS_LINEAR_DECAY_LENGTH = 100000
-        super(GlobalEpsilonSchedule, self).__init__(eps_start, EPS_END, EPS_EXPONENTIAL_DECAY, EPS_LINEAR_DECAY_LENGTH)
+        # EPS_LINEAR_DECAY_LENGTH = 100000
+        super(GlobalEpsilonSchedule, self).__init__(eps_start, EPS_END, EPS_EXPONENTIAL_DECAY, eps_lin_dec)
 
     def update_epsilon(self, current_epsilon, num_executions):
         if num_executions < self.eps_linear_decay_length:

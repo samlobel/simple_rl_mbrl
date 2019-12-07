@@ -91,9 +91,27 @@ def create_log_dir(experiment_name):
         print("Successfully created the directory %s " % path)
     return path
 
+def test_render(agent, mdp):
+    while True:
+        print("Press ctrl-C to quit")
+        mdp.set_render(True)
+        mdp.reset()
+        state = mdp.init_state
+        while True:
+            action = agent.act(state.features(), train_mode=False)
+            reward, next_state = mdp.execute_agent_action(action)
+            state = next_state
+
+            game_over = mdp.game_over if hasattr(mdp, 'game_over') else False
+            if state.is_terminal() or game_over:
+                print('bye bye')
+                break
+
+            # print('heelo!')
 
 
-def train(agent, mdp, episodes, steps, init_episodes=10):
+def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir):
+    model_save_loc = os.path.join(logdir, 'model.tar')
     per_episode_scores = []
     last_10_scores = deque(maxlen=100)
     iteration_counter = 0
@@ -121,7 +139,13 @@ def train(agent, mdp, episodes, steps, init_episodes=10):
             observation_batch = np.stack(observation_buffer)
             obs_rms.update(observation_batch)
 
+    last_save = time.time()
     for episode in range(episodes):
+        if time.time() - last_save > save_every:
+            print("Saving Model")
+            last_save = time.time()
+            torch.save(agent.state_dict(), model_save_loc)
+
         mdp.reset()
         state = deepcopy(mdp.init_state)
 
@@ -199,10 +223,13 @@ if __name__ == '__main__':
     parser.add_argument("--eval_eps", type=float, default=0.05)
     parser.add_argument("--tensor_log", type=bool, default=False)
     parser.add_argument("--env", type=str, default="Acrobot-v1")
-    # parser.add_argument("--save_every", type=int, help="Save every n seconds", default=60)
+    parser.add_argument("--save_every", type=int, help="Save every n seconds", default=60)
+    parser.add_argument("--mode", type=str, help="'train' or 'view'", default='train')
+    parser.add_argument("--epsilon_linear_decay", type=int, help="'train' or 'view'", default=100000)
     args = parser.parse_args()
 
     logdir = create_log_dir(args.experiment_name)
+    model_save_loc = os.path.join(logdir, 'model.tar')
     learning_rate = 1e-3 # 0.00025 for pong
 
     overall_mdp = GymMDP(env_name=args.env, pixel_observation=args.pixel_observation, render=args.render,
@@ -220,11 +247,23 @@ if __name__ == '__main__':
 
     state_dim = overall_mdp.env.observation_space.shape if args.pixel_observation else overall_mdp.env.observation_space.shape[0]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+    # device = torch.device("cpu")
     ddqn_agent = DQNAgent(state_size=state_dim, action_size=len(overall_mdp.actions),
-                          trained_options=[], seed=args.seed, device=device,
-                          name="GlobalDDQN", lr=learning_rate, tensor_log=args.tensor_log, use_double_dqn=True,
-                          exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
-                          evaluation_epsilon=args.eval_eps)
-    ddqn_episode_scores, s_ri_buffer = train(ddqn_agent, overall_mdp, args.episodes, args.steps)
-    save_all_scores(args.experiment_name, logdir, args.seed, ddqn_episode_scores)
+                        trained_options=[], seed=args.seed, device=device,
+                        name="GlobalDDQN", lr=learning_rate, tensor_log=args.tensor_log, use_double_dqn=True,
+                        exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
+                        evaluation_epsilon=args.eval_eps,
+                        epsilon_linear_decay=args.epsilon_linear_decay)
+
+
+    if args.mode == 'train':
+        ddqn_episode_scores, s_ri_buffer = train(ddqn_agent, overall_mdp, args.episodes, args.steps, save_every=args.save_every, logdir=logdir)
+        save_all_scores(args.experiment_name, logdir, args.seed, ddqn_episode_scores)
+    elif args.mode == 'view':
+        print('waow')
+        print(model_save_loc)
+        ddqn_agent.load_state_dict(torch.load(model_save_loc))
+        test_render(ddqn_agent, overall_mdp)
+        pass
+    else:
+        raise Exception("HEELLOOO")
