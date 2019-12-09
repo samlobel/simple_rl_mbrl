@@ -4,6 +4,52 @@ import torch.nn.functional as F
 import pdb
 
 
+
+class DenseTransitionModel(nn.Module):
+    def __init__(self, state_size, action_size, seed, fc1_units=256, fc2_units=128):
+        super(DenseTransitionModel, self).__init__()
+        self.state_size = state_size
+        self.action_size = action_size
+        self.seed = torch.manual_seed(seed)
+        self.fc1 = nn.Linear(state_size, fc1_units)
+        self.fc2 = nn.Linear(fc1_units, fc2_units)
+        # This gets reshaped to make a state for every action.
+        self.fc3 = nn.Linear(fc2_units, action_size * state_size)
+
+    def forward(self, state, action):
+        """
+        Predicts a state for every action... I think.
+        """
+        x = F.relu(self.fc1(state))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        x = x.view(-1, self.state_size, self.action_size)
+        x = x[:,:,action]
+        return x
+
+class DenseRewardModel(nn.Module):
+    def __init__(self, state_size, action_size, seed, fc1_units=256, fc2_units=128):
+        super(DenseTransitionModel, self).__init__()
+        self.state_size = state_size
+        self.action_size = action_size
+        self.seed = torch.manual_seed(seed)
+        self.fc1 = nn.Linear(state_size, fc1_units)
+        self.fc2 = nn.Linear(fc1_units, fc2_units)
+        # This gets reshaped to make a state for every action.
+        self.fc3 = nn.Linear(fc2_units, action_size)
+
+    def forward(self, state, action):
+        """
+        Predicts a reward for every action... I think.
+        """
+        x = F.relu(self.fc1(state))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        # x = x.view(-1, self.state_size, self.action_size)
+        x = x[:,action]
+        return x
+
+
 class DenseQNetwork(nn.Module):
     """Actor (Policy) Model."""
 

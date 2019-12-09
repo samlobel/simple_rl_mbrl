@@ -40,7 +40,10 @@ NUM_EPISODES = 3500
 NUM_STEPS = 10000
 
 class DQNAgent(Agent, nn.Module):
-    """Interacts with and learns from the environment."""
+    """Interacts with and learns from the environment.
+    
+    Why do I add the "module" part? I really don't remember.
+    """
 
     def __init__(self, state_size, action_size, trained_options, seed, device, name="DQN-Agent",
                  eps_start=1., tensor_log=False, lr=LR, use_double_dqn=True, gamma=GAMMA, loss_function="huber",
@@ -173,6 +176,14 @@ class DQNAgent(Agent, nn.Module):
     def get_best_actions_batched(self, states):
         q_values = self.get_batched_qvalues(states)
         return torch.argmax(q_values, dim=1)
+
+    def get_best_action(self, state):
+        """
+        This was written by Sam, meaning you just can't trust it.
+        """
+        print('probably check this function')
+        q_values = self.get_qvalues(state)
+        return torch.argmax(q_values)
 
     def get_value(self, state):
         action_values = self.get_qvalues(state)
