@@ -28,6 +28,8 @@ from simple_rl.tasks.gym.GymMDPClass import GymMDP
 from simple_rl.tasks.lunar_lander.LunarLanderMDPClass import LunarLanderMDP
 from simple_rl.agents.func_approx.sam_stuff.RandomNetworkDistillationClass import RNDModel, RunningMeanStd
 
+from simple_rl.agents.func_approx.sam_stuff.model import DenseTransitionModel, DenseRewardModel, DenseTerminationModel
+
 
 ## Hyperparameters
 BUFFER_SIZE = int(1e6)  # replay buffer size
@@ -38,6 +40,126 @@ LR = 1e-4  # learning rate
 UPDATE_EVERY = 1  # how often to update the network
 NUM_EPISODES = 3500
 NUM_STEPS = 10000
+
+class WorldModel(nn.Module):
+    """Sort of like DQNAgent for the world-model.
+    This should be helpful because we can use it to train all the things
+    at once.
+    """
+    def __init__(self, state_size, action_size, trained_options, seed, device, name="WorldModel",
+                 # eps_start=1.,
+                 tensor_log=False, lr=LR,
+                 # use_double_dqn=True,
+                 gamma=GAMMA,
+                 # loss_function="huber",
+                 gradient_clip=None,
+                 #evaluation_epsilon=0.05, exploration_method="eps-greedy",
+                 pixel_observation=False, writer=None,
+                 epsilon_linear_decay=100000):
+
+        nn.Module.__init__(self)
+
+        self.state_size = state_size
+        self.action_size = action_size
+        self.trained_options = trained_options
+        self.learning_rate = lr
+        # self.use_ddqn = use_double_dqn
+        self.gamma = gamma
+        # I'm going to just do MSE for losses.
+        # self.loss_function = loss_function
+        self.gradient_clip = gradient_clip
+        # self.evaluation_epsilon = evaluation_epsilon
+        # self.exploration_method = exploration_method
+        self.pixel_observation = pixel_observation
+        self.seed = random.seed(seed)
+        np.random.seed(seed)
+        self.tensor_log = tensor_log
+        self.device = device
+
+        # Q-Network
+        if pixel_observation:
+            raise Exception("World model doesn't work with pixel_observation right now but leaving it in in case I get serious")
+            # self.policy_network = ConvQNetwork(in_channels=4, n_actions=action_size).to(self.device)
+            # self.target_network = ConvQNetwork(in_channels=4, n_actions=action_size).to(self.device)
+        else:
+            self.transition_model = DenseTransitionModel(state_size, action_size, seed)
+            self.reward_model = DenseRewardModel(state_size, action_size, seed)
+            self.termination_model = DenseTerminationModel(state_size, action_size, seed)
+            # self.policy_network = DenseQNetwork(state_size, action_size, seed, fc1_units=32, fc2_units=16).to(self.device)
+            # self.target_network = DenseQNetwork(state_size, action_size, seed, fc1_units=32, fc2_units=16).to(self.device)
+
+        all_parameters = list(self.transition_model.parameters()) + list(self.reward_model.parameters()) + list(self.termination_model.parameters())
+        self.optimizer = optim.Adam(all_parameters, lr=lr)
+        # Replay memory
+        self.replay_buffer = ReplayBuffer(action_size, BUFFER_SIZE, BATCH_SIZE, seed, self.device, pixel_observation)
+        # Initialize time step (for updating every UPDATE_EVERY steps)
+        self.t_step = 0
+
+        self.num_executions = 0 # Number of times act() is called (used for eps-decay)
+
+        # Debugging attributes
+        self.num_updates = 0
+        self.num_epsilon_updates = 0
+
+        if self.tensor_log:
+            self.writer = SummaryWriter() if writer is None else writer
+
+        print("\nCreating {} with lr={} and buffer_sz={}\n".format(name, self.learning_rate, BUFFER_SIZE))
+
+
+    def forward(self, *args, **kwargs):
+        pass
+
+    def step(self, state, action, reward, next_state, done, num_steps=1):
+        self.replay_buffer.add(state, action, reward, next_state, done, num_steps)
+        self.t_step = (self.t_step + 1) % UPDATE_EVERY
+        if self.t_step == 0:
+            # If enough samples are available in memory, get random subset and learn
+            if len(self.replay_buffer) > BATCH_SIZE:
+                experiences = self.replay_buffer.sample(batch_size=BATCH_SIZE)
+                self._learn(experiences, GAMMA)
+                if self.tensor_log:
+                    self.writer.add_scalar("NumPositiveTransitionsWorldModel", self.replay_buffer.positive_transitions[-1], self.num_updates)
+                self.num_updates += 1
+        # raise NotImplementedError()
+
+    def _learn(self, experiences):#, gamma):
+        """
+        Update value parameters using given batch of experience tuples.
+        Args:
+            experiences (tuple<torch.Tensor>): tuple of (s, a, r, s', done, tau) tuples
+            gamma (float): discount factor
+        """
+        states, actions, rewards, next_states, dones, steps = experiences
+
+        next_states_predicted = self.transition_model(states, actions)
+        rewards_predicted = self.reward_model(states, actions)
+        dones_predicted = self.termination_model(states, actions, mode="logits")
+
+        transition_error = F.mse_loss(next_states, next_states_predicted)
+        reward_error = F.mse_loss(rewards, rewards_predicted)
+        termination_error = F.binary_cross_entropy_with_logits(dones_predicted, dones)
+
+        loss = transition_error + reward_error + termination_error # They're independent networks...
+        self.optimizer.zero_grad()
+        loss.backward()
+
+        if self.gradient_clip is not None:
+            for param in self.all_parameters:
+                param.grad.data.clamp_(-self.gradient_clip, self.gradient_clip)
+
+        self.optimizer.step()
+
+        if self.tensor_log:
+            self.writer.add_scalar("Total-WorldModel-Loss", loss.item(), self.num_updates)
+            self.writer.add_scalar("Transition-Prediction-Loss", transition_error.item(), self.num_updates)
+            self.writer.add_scalar("Reward-Prediction-Loss", reward_error.item(), self.num_updates)
+            self.writer.add_scalar("Termination-Prediction-Loss", termination_error.item(), self.num_updates)
+
+            self.writer.add_scalar("TransFunc-GradientNorm", compute_gradient_norm(self.transition_model), self.num_updates)
+            self.writer.add_scalar("RewFunc-GradientNorm", compute_gradient_norm(self.reward_model), self.num_updates)
+            self.writer.add_scalar("TermFunc-GradientNorm", compute_gradient_norm(self.termination_model), self.num_updates)
+
 
 class DQNAgent(Agent, nn.Module):
     """Interacts with and learns from the environment.

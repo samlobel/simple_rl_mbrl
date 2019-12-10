@@ -37,10 +37,12 @@ class Composer:
     NOTE: For completeness, this really does need something like a termination function. Just like STEVE.
     """
 
-    def __init__(self, q_network, t_network, r_network):
+    def __init__(self, q_network, t_network, r_network, termination_network=None):
+        """I'm just not sure if we even want to use the termination network..."""
         self.q_network = q_network
         self.t_network = t_network
         self.r_network = r_network
+        self.termination_network = termination_network
 
     def get_value_for_rollouts(self, state, first_action, num_rollouts, gamma=0.99):
         rollout_values = []

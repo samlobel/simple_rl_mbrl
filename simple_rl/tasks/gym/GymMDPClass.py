@@ -44,6 +44,9 @@ class GymMDP(MDP):
         MDP.__init__(self, range(self.env.action_space.n), self._transition_func, self._reward_func,
                      init_state=GymState(init_obs))
 
+    def set_render(self, render):
+        self.render = render
+
     @staticmethod
     def is_goal_state(state):
         return state.is_terminal()

@@ -30,7 +30,7 @@ from simple_rl.tasks.lunar_lander.LunarLanderMDPClass import LunarLanderMDP
 from simple_rl.agents.func_approx.sam_stuff.RandomNetworkDistillationClass import RNDModel, RunningMeanStd
 
 from simple_rl.agents.func_approx.sam_stuff.DQNAgentClass import DQNAgent
-
+from simple_rl.agents.func_approx.sam_stuff.DQNAgentClass import WorldModel
 
 NUM_EPISODES = 3500
 NUM_STEPS = 10000
