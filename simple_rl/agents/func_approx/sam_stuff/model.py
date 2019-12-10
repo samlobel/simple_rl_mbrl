@@ -26,7 +26,9 @@ class DenseTerminationModel(nn.Module):
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         # x = x.view(-1, self.state_size, self.action_size)
-        x = x[:,action]
+        x = x.gather(1, action)
+        # return x
+        # x = x[:,action]
         if mode == "logits":
             # Sigmoid! Important for termination...
             return x
@@ -51,12 +53,24 @@ class DenseTransitionModel(nn.Module):
         """
         Predicts a state for every action... I think.
         """
+
         x = F.relu(self.fc1(state))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         x = x.view(-1, self.state_size, self.action_size)
-        x = x[:,:,action]
-        return x
+
+        ### THIS WORKS TOO. I DON'T UNDERSTAND THE OTHER BUT IT DOES GOOD.
+        # a2 = action.squeeze()
+        # action_one_hot = F.one_hot(a2, num_classes=self.action_size)
+        # action_one_hot = action_one_hot.unsqueeze(-1).float()
+        # print(action_one_hot.shape)
+        # to_return_onehot = x.bmm(action_one_hot)
+
+        for_gather = action.unsqueeze(1).expand(-1,self.state_size,-1)
+        after_gather = x.gather(2, for_gather).squeeze(-1)
+        # print(after_gather.shape)
+        return after_gather
+
 
 class DenseRewardModel(nn.Module):
     def __init__(self, state_size, action_size, seed, fc1_units=256, fc2_units=128):
@@ -76,8 +90,8 @@ class DenseRewardModel(nn.Module):
         x = F.relu(self.fc1(state))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
-        # x = x.view(-1, self.state_size, self.action_size)
-        x = x[:,action]
+        # Expects something like 32,1. It's sort of like where to pluck...
+        x = x.gather(1, action)
         return x
 
 

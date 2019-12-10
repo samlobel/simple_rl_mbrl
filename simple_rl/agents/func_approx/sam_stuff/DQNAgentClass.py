@@ -38,8 +38,11 @@ GAMMA = 0.99  # discount factor
 TAU = 1e-3  # for soft update of target parameters
 LR = 1e-4  # learning rate
 UPDATE_EVERY = 1  # how often to update the network
+# UPDATE_EVERY = 10  # how often to update the network
 NUM_EPISODES = 3500
 NUM_STEPS = 10000
+
+LOG_EVERY=10
 
 class WorldModel(nn.Module):
     """Sort of like DQNAgent for the world-model.
@@ -82,9 +85,9 @@ class WorldModel(nn.Module):
             # self.policy_network = ConvQNetwork(in_channels=4, n_actions=action_size).to(self.device)
             # self.target_network = ConvQNetwork(in_channels=4, n_actions=action_size).to(self.device)
         else:
-            self.transition_model = DenseTransitionModel(state_size, action_size, seed)
-            self.reward_model = DenseRewardModel(state_size, action_size, seed)
-            self.termination_model = DenseTerminationModel(state_size, action_size, seed)
+            self.transition_model = DenseTransitionModel(state_size, action_size, seed).to(self.device)
+            self.reward_model = DenseRewardModel(state_size, action_size, seed).to(self.device)
+            self.termination_model = DenseTerminationModel(state_size, action_size, seed).to(self.device)
             # self.policy_network = DenseQNetwork(state_size, action_size, seed, fc1_units=32, fc2_units=16).to(self.device)
             # self.target_network = DenseQNetwork(state_size, action_size, seed, fc1_units=32, fc2_units=16).to(self.device)
 
@@ -117,7 +120,8 @@ class WorldModel(nn.Module):
             # If enough samples are available in memory, get random subset and learn
             if len(self.replay_buffer) > BATCH_SIZE:
                 experiences = self.replay_buffer.sample(batch_size=BATCH_SIZE)
-                self._learn(experiences, GAMMA)
+                # self._learn(experiences, GAMMA)
+                self._learn(experiences)
                 if self.tensor_log:
                     self.writer.add_scalar("NumPositiveTransitionsWorldModel", self.replay_buffer.positive_transitions[-1], self.num_updates)
                 self.num_updates += 1
@@ -150,7 +154,10 @@ class WorldModel(nn.Module):
 
         self.optimizer.step()
 
-        if self.tensor_log:
+        # if self.tensor_log:
+        if self.tensor_log and self.num_updates % LOG_EVERY == 0:
+            # print('logging...')
+            print(self.num_updates)
             self.writer.add_scalar("Total-WorldModel-Loss", loss.item(), self.num_updates)
             self.writer.add_scalar("Transition-Prediction-Loss", transition_error.item(), self.num_updates)
             self.writer.add_scalar("Reward-Prediction-Loss", reward_error.item(), self.num_updates)
@@ -450,7 +457,8 @@ class DQNAgent(Agent, nn.Module):
 
         self.optimizer.step()
 
-        if self.tensor_log:
+        # if self.tensor_log:
+        if self.tensor_log and self.num_updates % LOG_EVERY == 0:
             self.writer.add_scalar("DQN-Loss", loss.item(), self.num_updates)
             self.writer.add_scalar("DQN-AverageTargetQvalue", Q_targets.mean().item(), self.num_updates)
             self.writer.add_scalar("DQN-AverageQValue", Q_expected.mean().item(), self.num_updates)

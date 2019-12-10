@@ -110,7 +110,7 @@ def test_render(agent, mdp):
             # print('heelo!')
 
 
-def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir):
+def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir, world_model=None):
     model_save_loc = os.path.join(logdir, 'model.tar')
     per_episode_scores = []
     last_10_scores = deque(maxlen=100)
@@ -189,6 +189,11 @@ def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir):
 
             agent.step(state.features(), action, reward, next_state.features(), next_state.is_terminal(), num_steps=1)
             agent.update_epsilon()
+
+            if world_model is not None:
+                # NOTE: This doesn't really do anything...
+                world_model.step(state.features(), action, reward, next_state.features(), next_state.is_terminal(), num_steps=1)
+
             state = next_state
             score += reward
             if agent.tensor_log:
@@ -221,11 +226,12 @@ if __name__ == '__main__':
     parser.add_argument("--pixel_observation", action='store_true', help="Images / Dense input", default=False)
     parser.add_argument("--exploration_method", type=str, default="eps-greedy")
     parser.add_argument("--eval_eps", type=float, default=0.05)
-    parser.add_argument("--tensor_log", type=bool, default=False)
+    parser.add_argument("--tensor_log", default=False, action='store_true', help="Include this option if you want logging.")
     parser.add_argument("--env", type=str, default="Acrobot-v1")
     parser.add_argument("--save_every", type=int, help="Save every n seconds", default=60)
     parser.add_argument("--mode", type=str, help="'train' or 'view'", default='train')
     parser.add_argument("--epsilon_linear_decay", type=int, help="'train' or 'view'", default=100000)
+    parser.add_argument("--use_world_model", default=False, action='store_true', help="Include this option if you want to see how a world model trains.")
     args = parser.parse_args()
 
     logdir = create_log_dir(args.experiment_name)
@@ -248,6 +254,7 @@ if __name__ == '__main__':
     state_dim = overall_mdp.env.observation_space.shape if args.pixel_observation else overall_mdp.env.observation_space.shape[0]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # device = torch.device("cpu")
+
     ddqn_agent = DQNAgent(state_size=state_dim, action_size=len(overall_mdp.actions),
                         trained_options=[], seed=args.seed, device=device,
                         name="GlobalDDQN", lr=learning_rate, tensor_log=args.tensor_log, use_double_dqn=True,
@@ -255,9 +262,21 @@ if __name__ == '__main__':
                         evaluation_epsilon=args.eval_eps,
                         epsilon_linear_decay=args.epsilon_linear_decay)
 
+    if args.use_world_model:
+        world_model = WorldModel(state_size=state_dim, action_size=len(overall_mdp.actions),
+                            trained_options=[], seed=args.seed, device=device,
+                            name="WorldModel", lr=learning_rate, tensor_log=args.tensor_log,# use_double_dqn=True,
+                            #exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
+                            #evaluation_epsilon=args.eval_eps,
+                            #epsilon_linear_decay=args.epsilon_linear_decay
+                            )
+    else:
+        world_model = None
+
 
     if args.mode == 'train':
-        ddqn_episode_scores, s_ri_buffer = train(ddqn_agent, overall_mdp, args.episodes, args.steps, save_every=args.save_every, logdir=logdir)
+        ddqn_episode_scores, s_ri_buffer = train(
+            ddqn_agent, overall_mdp, args.episodes, args.steps, save_every=args.save_every, logdir=logdir, world_model=world_model)
         save_all_scores(args.experiment_name, logdir, args.seed, ddqn_episode_scores)
     elif args.mode == 'view':
         print('waow')
