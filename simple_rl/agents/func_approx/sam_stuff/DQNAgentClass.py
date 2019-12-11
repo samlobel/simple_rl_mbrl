@@ -113,6 +113,44 @@ class WorldModel(nn.Module):
     def forward(self, *args, **kwargs):
         pass
 
+    def get_prediction(self, state, action):
+        """
+        Unfortunately, needs to handle numpy arrays AND torch things.
+        AND ints/lazy-states.
+        """
+        # Should work in similar circumstances to "dqn_agent.act"
+        # We're assuming 'action' is a simple integer...
+        # Instead we need it to be an array
+
+        if isinstance(state, np.ndarray):
+            state = torch.from_numpy(state)
+        elif isinstance(state, torch.Tensor):
+            pass
+        else:
+            state = torch.from_numpy(np.asarray(state))
+
+        if isinstance(action, np.ndarray):
+            action = torch.from_numpy(action)
+        elif isinstance(action, torch.Tensor):
+            pass
+        else:
+            action = torch.from_numpy(np.asarray(action))
+
+        state = state.float().unsqueeze(0).to(self.device)
+        action = action.long().unsqueeze(0).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            next_state = self.transition_model(state, action).squeeze()
+            reward = self.reward_model(state, action).squeeze()
+            termination = self.termination_model(state, action, mode="probs").squeeze()
+
+
+        return dict(
+            next_state=next_state,
+            reward=reward,
+            termination=termination
+        )
+
     def step(self, state, action, reward, next_state, done, num_steps=1):
         self.replay_buffer.add(state, action, reward, next_state, done, num_steps)
         self.t_step = (self.t_step + 1) % UPDATE_EVERY
@@ -310,7 +348,6 @@ class DQNAgent(Agent, nn.Module):
         """
         This was written by Sam, meaning you just can't trust it.
         """
-        print('probably check this function')
         q_values = self.get_qvalues(state)
         return torch.argmax(q_values)
 
@@ -325,7 +362,9 @@ class DQNAgent(Agent, nn.Module):
         return np.max(action_values.cpu().data.numpy())
 
     def get_qvalue(self, state, action_idx):
-        state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
+        if isinstance(state, np.ndarray):
+            state = torch.from_numpy(state)
+        state = state.float().unsqueeze(0).to(self.device)
         self.policy_network.eval()
         with torch.no_grad():
             action_values = self.policy_network(state)
@@ -333,7 +372,9 @@ class DQNAgent(Agent, nn.Module):
         return action_values[0][action_idx]
 
     def get_qvalues(self, state):
-        state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
+        if isinstance(state, np.ndarray):
+            state = torch.from_numpy(state)
+        state = state.float().unsqueeze(0).to(self.device)
         self.policy_network.eval()
         with torch.no_grad():
             action_values = self.policy_network(state)

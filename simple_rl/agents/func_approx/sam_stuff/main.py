@@ -31,6 +31,8 @@ from simple_rl.agents.func_approx.sam_stuff.RandomNetworkDistillationClass impor
 
 from simple_rl.agents.func_approx.sam_stuff.DQNAgentClass import DQNAgent
 from simple_rl.agents.func_approx.sam_stuff.DQNAgentClass import WorldModel
+from simple_rl.agents.func_approx.sam_stuff.ModelQNetworkComposer import Composer
+
 
 NUM_EPISODES = 3500
 NUM_STEPS = 10000
@@ -107,10 +109,38 @@ def test_render(agent, mdp):
                 print('bye bye')
                 break
 
-            # print('heelo!')
+
+def evaluate_different_models(mdp, composer, num_runs_each=1, training_steps=None):
+    # Somehow I want to also graph this... How should I do that?
+    # I could make this a class, and keep track of past things. But that does
+    # seem heavy-handed. How about I start by just printing them out...
+    lambdas_to_test = [0.0, 0.5, 1.0]
+    rollout_depth = 5
+
+    for lam in lambdas_to_test:
+        all_rewards = []
+        for _ in range(num_runs_each):
+            mdp.reset()
+            state = deepcopy(mdp.init_state)
+            state = np.asarray(state.features())
+            reward_so_far = 0.0
+            while True:
+                # state = torch.from_numpy(state).float().unsqueeze(0).to("cuda")
+                action = composer.get_best_action_td_lambda(state, rollout_depth, gamma=0.99, lam=lam)
+                reward, next_state = mdp.execute_agent_action(action)
+                reward_so_far += reward
+                game_over = mdp.game_over if hasattr(mdp, 'game_over') else False
+                if next_state.is_terminal() or game_over:
+                    break
+
+                state = np.asarray(next_state.features())
+            all_rewards.append(reward_so_far)
+        all_rewards = np.asarray(all_rewards)
+        print(f"{num_runs_each} runs:     Lam={lam}, Reward={np.mean(all_rewards)} ({np.std(all_rewards)})")
+        print(all_rewards)
 
 
-def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir, world_model=None):
+def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir, world_model, composer):
     model_save_loc = os.path.join(logdir, 'model.tar')
     per_episode_scores = []
     last_10_scores = deque(maxlen=100)
@@ -141,6 +171,12 @@ def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir, 
 
     last_save = time.time()
     for episode in range(episodes):
+
+        if episode % 10 == 0:
+            print(f"Evaluating on episode {episode}")
+            evaluate_different_models(mdp, composer, num_runs_each=5)
+            print("At some point definitely make this a CL-Arg")
+
         if time.time() - last_save > save_every:
             print("Saving Model")
             last_save = time.time()
@@ -252,10 +288,11 @@ if __name__ == '__main__':
     # overall_mdp = LunarLanderMDP(render=args.render, seed=args.seed)
 
     state_dim = overall_mdp.env.observation_space.shape if args.pixel_observation else overall_mdp.env.observation_space.shape[0]
+    action_dim = len(overall_mdp.actions)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # device = torch.device("cpu")
 
-    ddqn_agent = DQNAgent(state_size=state_dim, action_size=len(overall_mdp.actions),
+    ddqn_agent = DQNAgent(state_size=state_dim, action_size=action_dim,
                         trained_options=[], seed=args.seed, device=device,
                         name="GlobalDDQN", lr=learning_rate, tensor_log=args.tensor_log, use_double_dqn=True,
                         exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
@@ -263,20 +300,28 @@ if __name__ == '__main__':
                         epsilon_linear_decay=args.epsilon_linear_decay)
 
     if args.use_world_model:
-        world_model = WorldModel(state_size=state_dim, action_size=len(overall_mdp.actions),
+        world_model = WorldModel(state_size=state_dim, action_size=action_dim,
                             trained_options=[], seed=args.seed, device=device,
                             name="WorldModel", lr=learning_rate, tensor_log=args.tensor_log,# use_double_dqn=True,
                             #exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
                             #evaluation_epsilon=args.eval_eps,
                             #epsilon_linear_decay=args.epsilon_linear_decay
                             )
+
     else:
         world_model = None
+
+    composer = Composer(
+        q_agent=ddqn_agent,
+        world_model=world_model,
+        action_size=action_dim,
+        device=device)
 
 
     if args.mode == 'train':
         ddqn_episode_scores, s_ri_buffer = train(
-            ddqn_agent, overall_mdp, args.episodes, args.steps, save_every=args.save_every, logdir=logdir, world_model=world_model)
+            ddqn_agent, overall_mdp, args.episodes, args.steps, save_every=args.save_every, logdir=logdir, world_model=world_model,
+            composer=composer)
         save_all_scores(args.experiment_name, logdir, args.seed, ddqn_episode_scores)
     elif args.mode == 'view':
         print('waow')

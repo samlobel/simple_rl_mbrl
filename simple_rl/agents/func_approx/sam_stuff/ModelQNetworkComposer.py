@@ -29,7 +29,7 @@ from simple_rl.tasks.lunar_lander.LunarLanderMDPClass import LunarLanderMDP
 from simple_rl.agents.func_approx.sam_stuff.RandomNetworkDistillationClass import RNDModel, RunningMeanStd
 
 from simple_rl.agents.func_approx.sam_stuff.DQNAgentClass import DQNAgent
-from simple_rl.agents.func_approx.sam_stuff.models import DenseTransitionModel, DenseRewardModel
+#from simple_rl.agents.func_approx.sam_stuff.models import DenseTransitionModel, DenseRewardModel
 
 
 class Composer:
@@ -37,14 +37,12 @@ class Composer:
     NOTE: For completeness, this really does need something like a termination function. Just like STEVE.
     """
 
-    def __init__(self, q_network, t_network, r_network, termination_network=None, *, action_size):
+    def __init__(self, *, q_agent, world_model, action_size, device):
         """I'm just not sure we want to use the termination network yet... I don't know if training it will be if we even want to use the termination network..."""
-        self.q_network = q_network
-        self.t_network = t_network
-        self.r_network = r_network
-        self.termination_network = termination_network
-
+        self.q_agent = q_agent
+        self.world_model = world_model
         self.action_size = action_size
+        self.device = device
 
     def _get_best_action_from_functional(self, functional):
         """
@@ -64,28 +62,29 @@ class Composer:
 
     def get_td_lambda_estimates(self, state, first_action, num_rollouts, gamma=0.99, lam=0.5):
         rollout_values = self.get_value_for_rollouts(state, first_action, num_rollouts, gamma=gamma)
-        lambda_scaler = [lam**i for i in range(num_rollouts)]
-        normalizing_factors = sum(lambda_scaler)
-        scaled_rollouts = [norm * rval for norm, rval in zip(rollout_values, normalizing_factors)]
-        lamda_estimate = sum(scaled_rollouts) / lambda_scaler
+        lambda_scalers = [lam**i for i in range(num_rollouts)]
+        normalizing_factor = sum(lambda_scalers)
+        scaled_rollouts = [norm * rval for norm, rval in zip(rollout_values, lambda_scalers)]
+        lamda_estimate = sum(scaled_rollouts) / normalizing_factor
         return lamda_estimate
     
     def get_value_for_rollouts(self, state, first_action, num_rollouts, gamma=0.99):
-        # Can termination function just influence current_discount?
-        # I would think so, but to be safe I'll keep them separate.
+        # Termination function can just influence current_discount
 
         rollout_values = []
         with torch.no_grad():
             discounted_reward_so_far = 0
             current_discount = 1.0
-            # chance_unterminated = 1.0
             current_state = state
             next_action = first_action
 
-            # first_q = self.q_network.get_qvalue(state, first_action)
-            for i in num_rollouts:
+            for i in range(num_rollouts):
+                # print(f"Doing rollout {i}")
                 # Get the q_value
-                q_value = self.q_network.get_qvalue(current_state, next_action)
+                q_value = self.q_agent.get_qvalue(current_state, next_action)
+
+                model_prediction = self.world_model.get_prediction(current_state, next_action)
+
                 # Calculate this rollout's value.
                 ### We're updating it so that it takes termination into account
                 rollout_value = discounted_reward_so_far + (current_discount * q_value)
@@ -93,21 +92,19 @@ class Composer:
                 rollout_values.append(rollout_value)
 
                 # Accumulate reward
-                r_value = self.r_network(current_state, next_action)
-                discounted_reward_so_far += (r_value * current_discount)
+                # r_value = self.r_network(current_state, next_action)
+                discounted_reward_so_far += (model_prediction['reward'] * current_discount)
 
                 # Now that we've added reward, update discount,
                 current_discount *= gamma
                 # Related: update chance untermiated
-                if self.termination_network:
-                    # termination and discount are used the same way
-                    chance_of_termination = self.termination_network(current_state, next_action, mode="probs")
-                    current_discount *= (1 - chance_of_termination)
 
-                # chance_unterminated *= (1 - chance_of_termination)
-                # Figure out next state and action.
-                current_state = self.t_network(current_state, next_action)
-                next_action = self.q_network.get_best_action(current_state)
+                current_discount *= (1 - model_prediction['termination'])
+
+                # Set next state and action.
+                current_state = model_prediction['next_state']
+                # current_state = self.t_network(current_state, next_action)
+                next_action = self.q_agent.get_best_action(current_state)
         
         return rollout_values
 
