@@ -37,18 +37,48 @@ class Composer:
     NOTE: For completeness, this really does need something like a termination function. Just like STEVE.
     """
 
-    def __init__(self, q_network, t_network, r_network, termination_network=None):
-        """I'm just not sure if we even want to use the termination network..."""
+    def __init__(self, q_network, t_network, r_network, termination_network=None, *, action_size):
+        """I'm just not sure we want to use the termination network yet... I don't know if training it will be if we even want to use the termination network..."""
         self.q_network = q_network
         self.t_network = t_network
         self.r_network = r_network
         self.termination_network = termination_network
 
+        self.action_size = action_size
+
+    def _get_best_action_from_functional(self, functional):
+        """
+        The functional is something that takes in an action, and returns a value.
+        It'll be created by filling in all the other values of some function like
+        get_td_lambda_estimates
+        """
+        action_values = [functional(i) for i in range(self.action_size)]
+        return np.argmax(np.asarray(action_values))
+
+    def get_best_action_td_lambda(self, state, num_rollouts, gamma=0.99, lam=0.5):
+        """The functional thing makes it much more readable and reusable IMO"""
+        def functional(action):
+            return self.get_td_lambda_estimates(state, action, num_rollouts, gamma=gamma, lam=lam)
+
+        return self._get_best_action_from_functional(functional)      
+
+    def get_td_lambda_estimates(self, state, first_action, num_rollouts, gamma=0.99, lam=0.5):
+        rollout_values = self.get_value_for_rollouts(state, first_action, num_rollouts, gamma=gamma)
+        lambda_scaler = [lam**i for i in range(num_rollouts)]
+        normalizing_factors = sum(lambda_scaler)
+        scaled_rollouts = [norm * rval for norm, rval in zip(rollout_values, normalizing_factors)]
+        lamda_estimate = sum(scaled_rollouts) / lambda_scaler
+        return lamda_estimate
+    
     def get_value_for_rollouts(self, state, first_action, num_rollouts, gamma=0.99):
+        # Can termination function just influence current_discount?
+        # I would think so, but to be safe I'll keep them separate.
+
         rollout_values = []
         with torch.no_grad():
             discounted_reward_so_far = 0
             current_discount = 1.0
+            # chance_unterminated = 1.0
             current_state = state
             next_action = first_action
 
@@ -57,16 +87,24 @@ class Composer:
                 # Get the q_value
                 q_value = self.q_network.get_qvalue(current_state, next_action)
                 # Calculate this rollout's value.
+                ### We're updating it so that it takes termination into account
                 rollout_value = discounted_reward_so_far + (current_discount * q_value)
+                # rollout_value = discounted_reward_so_far + (chance_unterminated * current_discount * q_value)
                 rollout_values.append(rollout_value)
 
                 # Accumulate reward
                 r_value = self.r_network(current_state, next_action)
                 discounted_reward_so_far += (r_value * current_discount)
 
-                # Now that we've added reward, update discount, 
+                # Now that we've added reward, update discount,
                 current_discount *= gamma
+                # Related: update chance untermiated
+                if self.termination_network:
+                    # termination and discount are used the same way
+                    chance_of_termination = self.termination_network(current_state, next_action, mode="probs")
+                    current_discount *= (1 - chance_of_termination)
 
+                # chance_unterminated *= (1 - chance_of_termination)
                 # Figure out next state and action.
                 current_state = self.t_network(current_state, next_action)
                 next_action = self.q_network.get_best_action(current_state)
@@ -75,18 +113,3 @@ class Composer:
 
 
                 
-
-
-
-
-
-
-def get_value_for_rollouts(q_network, t_network, r_network, num_rollouts, first_action):
-    """
-    Tentatively, we want to make a policy that chooses actions appropriately. That means adjusting
-    Q-values to reflect on-policy learning. So, we take a first action, and then proceed on-policy.
-    """
-
-    first_q = q_network.get_qvalue()
-
-    pass
