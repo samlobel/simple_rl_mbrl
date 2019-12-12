@@ -112,11 +112,12 @@ def test_render(agent, mdp):
 
 class Evaluator:
 
-    def __init__(self, mdp, composer, num_runs_each=1, rollout_depth=5, lambdas_to_test=None):
+    def __init__(self, mdp, composer, num_runs_each=1, rollout_depth=5, lambdas_to_test=None, logdir="."):
         self.mdp = mdp
         self.composer = composer
         self.num_runs_each = num_runs_each
         self.rollout_depth = rollout_depth
+        self.logdir = logdir
 
         if lambdas_to_test is None:
             self.lambdas_to_test = [0.0, 0.5, 1.0]
@@ -161,12 +162,14 @@ class Evaluator:
             print(all_rewards)
 
     def write_graphs(self):
+        plt.figure()
         for lam, vals in self.results.items():
             xs, ys = zip(*vals)
             ax = sns.lineplot(x=xs, y=ys, label=f"Lam={lam}")
-        plt.show()
-        pass
 
+        plt.savefig(os.path.join(self.logdir, "results.png"))
+        # plt.show()
+        plt.clf()
 
 
 def evaluate_different_models(mdp, composer, num_runs_each=1, training_steps=None):
@@ -230,7 +233,7 @@ def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir, 
 
     last_save = time.time()
 
-    evaluator = Evaluator(mdp, composer, num_runs_each=5, rollout_depth=5)
+    evaluator = Evaluator(mdp, composer, num_runs_each=5, rollout_depth=5, logdir=logdir)
 
     for episode in range(episodes):
 
