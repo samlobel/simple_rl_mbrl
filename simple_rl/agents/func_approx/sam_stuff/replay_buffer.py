@@ -21,11 +21,18 @@ class ReplayBuffer:
             seed (int): random seed
             device (torch.device): cpu / cuda:0 / cuda:1
             pixel_observation (bool): Whether observations are dense or images
+
+        TODO: deque is very non-optimal for something that uses random.sample. Because
+        it's O(n) to access. So, how about we just do a list with popping. Popping is bad as well.
+        It needs to be cyclical... which is annoying for a bunch of reasons.
+        Although, maybe we could do non-cyclical at first, and then once it fills up
+        switch to cyclical! I like that.
         """
         self.action_size = action_size
         self.memory = deque(maxlen=buffer_size)
         self.batch_size = batch_size
-        self.experience = namedtuple("Experience", field_names=["state", "action", "reward", "next_state", "done", "num_steps"])
+        # self.experience = namedtuple("Experience", field_names=["state", "action", "reward", "next_state", "done", "num_steps"])
+        self.experience = namedtuple("Experience", field_names=["state", "action", "reward", "next_state", "done", "num_steps", "time_limit_truncated"])
         self.seed = random.seed(seed)
         np.random.seed(seed)
         self.device = device
@@ -33,7 +40,7 @@ class ReplayBuffer:
 
         self.positive_transitions = []
 
-    def add(self, state, action, reward, next_state, done, num_steps):
+    def add(self, state, action, reward, next_state, done, num_steps, time_limit_truncated):
         """
         Add new experience to memory.
         Args:
@@ -44,7 +51,7 @@ class ReplayBuffer:
             done (bool)
             num_steps (int): number of steps taken by the action/option to terminate
         """
-        e = self.experience(state, action, reward, next_state, done, num_steps)
+        e = self.experience(state, action, reward, next_state, done, num_steps, time_limit_truncated)
         self.memory.append(e)
 
     def sample(self, batch_size=None):
@@ -69,8 +76,9 @@ class ReplayBuffer:
             next_states = torch.from_numpy(np.vstack([e.next_state for e in experiences if e is not None])).float().to(self.device)
         dones = torch.from_numpy(np.vstack([e.done for e in experiences if e is not None]).astype(np.uint8)).float().to(self.device)
         steps = torch.from_numpy(np.vstack([e.num_steps for e in experiences if e is not None])).float().to(self.device)
+        time_limit_truncateds = torch.from_numpy(np.vstack([e.time_limit_truncated for e in experiences if e is not None]).astype(np.uint8)).float().to(self.device)
 
-        return states, actions, rewards, next_states, dones, steps
+        return states, actions, rewards, next_states, dones, steps, time_limit_truncateds
 
     def __len__(self):
         """Return the current size of internal memory."""

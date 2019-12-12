@@ -72,6 +72,7 @@ class GymMDP(MDP):
         obs, reward, done, info = self.env.step(action)
 
         self.game_over = done
+        self.time_limit_truncated = info.get('TimeLimit.truncated', False)
 
         if self.render:
             self.env.render()
@@ -84,7 +85,7 @@ class GymMDP(MDP):
         else:
             is_terminal = self.term_func(obs, reward) if self.term_func is not None else done
 
-        self.next_state = GymState(obs, is_terminal=is_terminal)
+        self.next_state = GymState(obs, is_terminal=is_terminal, is_time_limit_truncated=self.time_limit_truncated)
 
         if self.clip_rewards:
             if reward < 0:

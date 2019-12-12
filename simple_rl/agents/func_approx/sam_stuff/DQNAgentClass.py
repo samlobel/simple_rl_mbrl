@@ -151,8 +151,8 @@ class WorldModel(nn.Module):
             termination=termination
         )
 
-    def step(self, state, action, reward, next_state, done, num_steps=1):
-        self.replay_buffer.add(state, action, reward, next_state, done, num_steps)
+    def step(self, state, action, reward, next_state, done, num_steps=1, time_limit_truncated=False):
+        self.replay_buffer.add(state, action, reward, next_state, done, num_steps, time_limit_truncated)
         self.t_step = (self.t_step + 1) % UPDATE_EVERY
         if self.t_step == 0:
             # If enough samples are available in memory, get random subset and learn
@@ -172,7 +172,10 @@ class WorldModel(nn.Module):
             experiences (tuple<torch.Tensor>): tuple of (s, a, r, s', done, tau) tuples
             gamma (float): discount factor
         """
-        states, actions, rewards, next_states, dones, steps = experiences
+        states, actions, rewards, next_states, dones, steps, time_limit_truncateds = experiences
+
+        # To get the "done" ones that really count, it needs to be done and NOT been time limit truncated.
+        truly_dones = dones * (1 - time_limit_truncateds)
 
         next_states_predicted = self.transition_model(states, actions)
         rewards_predicted = self.reward_model(states, actions)
@@ -180,7 +183,7 @@ class WorldModel(nn.Module):
 
         transition_error = F.mse_loss(next_states, next_states_predicted)
         reward_error = F.mse_loss(rewards, rewards_predicted)
-        termination_error = F.binary_cross_entropy_with_logits(dones_predicted, dones)
+        termination_error = F.binary_cross_entropy_with_logits(dones_predicted, truly_dones)
 
         loss = transition_error + reward_error + termination_error # They're independent networks...
         self.optimizer.zero_grad()
@@ -414,7 +417,7 @@ class DQNAgent(Agent, nn.Module):
 
         return action_values
 
-    def step(self, state, action, reward, next_state, done, num_steps=1):
+    def step(self, state, action, reward, next_state, done, num_steps=1, time_limit_truncated=False):
         """
         Interface method to perform 1 step of learning/optimization during training.
         Args:
@@ -426,7 +429,7 @@ class DQNAgent(Agent, nn.Module):
             num_steps (int): number of steps taken by the option to terminate
         """
         # Save experience in replay memory
-        self.replay_buffer.add(state, action, reward, next_state, done, num_steps)
+        self.replay_buffer.add(state, action, reward, next_state, done, num_steps, time_limit_truncated)
 
         # Learn every UPDATE_EVERY time steps.
         self.t_step = (self.t_step + 1) % UPDATE_EVERY
@@ -446,7 +449,7 @@ class DQNAgent(Agent, nn.Module):
             experiences (tuple<torch.Tensor>): tuple of (s, a, r, s', done, tau) tuples
             gamma (float): discount factor
         """
-        states, actions, rewards, next_states, dones, steps = experiences
+        states, actions, rewards, next_states, dones, steps, time_limit_truncateds = experiences
 
         if self.exploration_method == "rnd":
             observations = states[:, -1, :, :].unsqueeze(1)
@@ -474,7 +477,10 @@ class DQNAgent(Agent, nn.Module):
 
         # Compute Q targets for current states
         # Q_targets = rewards + (gamma * Q_targets_next * (1 - dones))
-        Q_targets = rewards + (discount_factors * Q_targets_next * (1 - dones))
+        # Q_targets = rewards + (discount_factors * Q_targets_next * (1 - dones))
+        # If you just timed out, you should still do the Q-targets_next thing.
+        truly_dones = dones * (1 - time_limit_truncateds)
+        Q_targets = rewards + (discount_factors * Q_targets_next * (1 - truly_dones))
 
         # Get expected Q values from local model
         Q_expected = self.policy_network(states).gather(1, actions)

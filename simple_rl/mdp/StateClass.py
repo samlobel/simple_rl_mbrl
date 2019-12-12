@@ -6,9 +6,10 @@ import numpy as np
 class State(object):
     ''' Abstract State class '''
 
-    def __init__(self, data=[], is_terminal=False):
+    def __init__(self, data=[], is_terminal=False, is_time_limit_truncated=False):
         self.data = data
         self._is_terminal = is_terminal
+        self._is_time_limit_truncated = is_time_limit_truncated
 
     def features(self):
         '''
@@ -29,6 +30,9 @@ class State(object):
 
     def is_terminal(self):
     	return self._is_terminal
+
+    def is_time_limit_truncated(self):
+        return self._is_time_limit_truncated
 
     def set_terminal(self, is_term=True):
         self._is_terminal = is_term

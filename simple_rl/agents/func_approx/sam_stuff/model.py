@@ -33,7 +33,7 @@ class DenseTerminationModel(nn.Module):
             # Sigmoid! Important for termination...
             return x
         elif mode == "probs":
-            return F.sigmoid(x)
+            return torch.sigmoid(x)
         else:
             raise Exception(f"Shouldn't get here...: {mode}")
 

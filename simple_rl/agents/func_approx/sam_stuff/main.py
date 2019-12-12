@@ -22,7 +22,7 @@ from tensorboardX import SummaryWriter
 
 from simple_rl.agents.AgentClass import Agent
 from simple_rl.agents.func_approx.ddpg.utils import compute_gradient_norm
-from simple_rl.agents.func_approx.sam_stuff.replay_buffer import ReplayBuffer
+# from simple_rl.agents.func_approx.sam_stuff.replay_buffer import ReplayBuffer
 from simple_rl.agents.func_approx.sam_stuff.model import ConvQNetwork, DenseQNetwork
 from simple_rl.agents.func_approx.sam_stuff.epsilon_schedule import *
 from simple_rl.tasks.gym.GymMDPClass import GymMDP
@@ -286,12 +286,12 @@ def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir, 
                 if agent.tensor_log:
                     agent.writer.add_scalar("Normalized Ri", normalized_intrinsic_reward, iteration_counter)
 
-            agent.step(state.features(), action, reward, next_state.features(), next_state.is_terminal(), num_steps=1)
+            agent.step(state.features(), action, reward, next_state.features(), next_state.is_terminal(),
+                num_steps=1, time_limit_truncated=next_state.is_time_limit_truncated())
             agent.update_epsilon()
 
-            if world_model is not None:
-                # NOTE: This doesn't really do anything...
-                world_model.step(state.features(), action, reward, next_state.features(), next_state.is_terminal(), num_steps=1)
+            world_model.step(state.features(), action, reward, next_state.features(), next_state.is_terminal(),
+                num_steps=1, time_limit_truncated=next_state.is_time_limit_truncated())
 
             state = next_state
             score += reward
@@ -330,7 +330,7 @@ if __name__ == '__main__':
     parser.add_argument("--save_every", type=int, help="Save every n seconds", default=60)
     parser.add_argument("--mode", type=str, help="'train' or 'view'", default='train')
     parser.add_argument("--epsilon_linear_decay", type=int, help="'train' or 'view'", default=100000)
-    parser.add_argument("--use_world_model", default=False, action='store_true', help="Include this option if you want to see how a world model trains.")
+    # parser.add_argument("--use_world_model", default=False, action='store_true', help="Include this option if you want to see how a world model trains.")
     args = parser.parse_args()
 
     logdir = create_log_dir(args.experiment_name)
@@ -362,17 +362,14 @@ if __name__ == '__main__':
                         evaluation_epsilon=args.eval_eps,
                         epsilon_linear_decay=args.epsilon_linear_decay)
 
-    if args.use_world_model:
-        world_model = WorldModel(state_size=state_dim, action_size=action_dim,
-                            trained_options=[], seed=args.seed, device=device,
-                            name="WorldModel", lr=learning_rate, tensor_log=args.tensor_log,# use_double_dqn=True,
-                            #exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
-                            #evaluation_epsilon=args.eval_eps,
-                            #epsilon_linear_decay=args.epsilon_linear_decay
-                            )
+    world_model = WorldModel(state_size=state_dim, action_size=action_dim,
+                        trained_options=[], seed=args.seed, device=device,
+                        name="WorldModel", lr=learning_rate, tensor_log=args.tensor_log,# use_double_dqn=True,
+                        #exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
+                        #evaluation_epsilon=args.eval_eps,
+                        #epsilon_linear_decay=args.epsilon_linear_decay
+                        )
 
-    else:
-        world_model = None
 
     composer = Composer(
         q_agent=ddqn_agent,
