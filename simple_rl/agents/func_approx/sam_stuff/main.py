@@ -1,6 +1,6 @@
 import numpy as np
 import random
-from collections import namedtuple, deque
+from collections import namedtuple, deque, defaultdict
 import matplotlib.pyplot as plt
 import seaborn as sns
 sns.set()
@@ -110,6 +110,65 @@ def test_render(agent, mdp):
                 break
 
 
+class Evaluator:
+
+    def __init__(self, mdp, composer, num_runs_each=1, rollout_depth=5, lambdas_to_test=None):
+        self.mdp = mdp
+        self.composer = composer
+        self.num_runs_each = num_runs_each
+        self.rollout_depth = rollout_depth
+
+        if lambdas_to_test is None:
+            self.lambdas_to_test = [0.0, 0.5, 1.0]
+        else:
+            self.lambdas_to_test = lambdas_to_test
+
+
+        self.results = defaultdict(list)
+
+    def evaluate_different_models(self, *, training_steps):
+        """
+        This does the evaluation, prints out results, but then importantly
+        populates some storage list, which we can then use to make plots.
+        """
+        lambdas_to_test = self.lambdas_to_test
+        mdp = self.mdp
+        composer = self.composer
+        num_runs_each = self.num_runs_each
+        rollout_depth = self.rollout_depth
+
+        for lam in lambdas_to_test:
+            all_rewards = []
+            for _ in range(num_runs_each):
+                mdp.reset()
+                state = deepcopy(mdp.init_state)
+                state = np.asarray(state.features())
+                reward_so_far = 0.0
+                while True:
+                    # state = torch.from_numpy(state).float().unsqueeze(0).to("cuda")
+                    action = composer.get_best_action_td_lambda(state, rollout_depth, gamma=0.99, lam=lam)
+                    reward, next_state = mdp.execute_agent_action(action)
+                    reward_so_far += reward
+                    game_over = mdp.game_over if hasattr(mdp, 'game_over') else False
+                    if next_state.is_terminal() or game_over:
+                        break
+
+                    state = np.asarray(next_state.features())
+                self.results[lam].append((training_steps, reward_so_far))
+                all_rewards.append(reward_so_far)
+            all_rewards = np.asarray(all_rewards)
+            print(f"{num_runs_each} runs:     Lam={lam}, Reward={np.mean(all_rewards)} ({np.std(all_rewards)})")
+            print(all_rewards)
+
+    def write_graphs(self):
+        for lam, vals in self.results.items():
+            xs, ys = zip(*vals)
+            ax = sns.lineplot(x=xs, y=ys, label=f"Lam={lam}")
+        plt.show()
+        pass
+
+
+
 def evaluate_different_models(mdp, composer, num_runs_each=1, training_steps=None):
     # Somehow I want to also graph this... How should I do that?
     # I could make this a class, and keep track of past things. But that does
@@ -170,12 +229,16 @@ def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir, 
             obs_rms.update(observation_batch)
 
     last_save = time.time()
+
+    evaluator = Evaluator(mdp, composer, num_runs_each=5, rollout_depth=5)
+
     for episode in range(episodes):
 
         if episode % 10 == 0:
             print(f"Evaluating on episode {episode}")
-            evaluate_different_models(mdp, composer, num_runs_each=5)
+            evaluator.evaluate_different_models(training_steps=episode)
             print("At some point definitely make this a CL-Arg")
+            evaluator.write_graphs()
 
         if time.time() - last_save > save_every:
             print("Saving Model")
