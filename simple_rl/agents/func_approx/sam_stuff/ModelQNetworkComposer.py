@@ -21,7 +21,7 @@ from tensorboardX import SummaryWriter
 
 from simple_rl.agents.AgentClass import Agent
 from simple_rl.agents.func_approx.ddpg.utils import compute_gradient_norm
-from simple_rl.agents.func_approx.sam_stuff.replay_buffer import ReplayBuffer
+# from simple_rl.agents.func_approx.sam_stuff.replay_buffer import ReplayBuffer
 from simple_rl.agents.func_approx.sam_stuff.model import ConvQNetwork, DenseQNetwork
 from simple_rl.agents.func_approx.sam_stuff.epsilon_schedule import *
 from simple_rl.tasks.gym.GymMDPClass import GymMDP
@@ -30,6 +30,7 @@ from simple_rl.agents.func_approx.sam_stuff.RandomNetworkDistillationClass impor
 
 from simple_rl.agents.func_approx.sam_stuff.DQNAgentClass import DQNAgent
 #from simple_rl.agents.func_approx.sam_stuff.models import DenseTransitionModel, DenseRewardModel
+
 
 
 class Composer:
@@ -43,6 +44,78 @@ class Composer:
         self.world_model = world_model
         self.action_size = action_size
         self.device = device
+
+    def create_targets_for_episode(self, *, states, actions, rewards, true_finish=True, gamma=0.99, last_next_state):
+        """
+        It's a little confusing because in some sense, if something finishes because
+        its out of time, we don't want to incorporate that into the MDP... Not sure
+        exactly what to do there.
+
+        We're getting the TRUE q values for all of these things...
+
+        Just start from the end and add up?
+
+        Should there be one more state than rewards? Because of "next state?" Not sure.
+        Probably honestly. It's our best estimate of value at least.
+        """
+        if not true_finish:
+            if last_next_state is None:
+                raise Exception("If it's not a true finish, you need the next state's value!")
+            last_value_estimate = max(self.q_agent.get_qvalues(last_next_state))
+            # I NEED TO MAKE THIS PYTHONED.
+        else:
+            last_value_estimate = 0
+
+        sar_tuples = list(zip(states, actions, rewards))
+        sar_tuples_reversed = list(reversed(sar_tuples))
+
+        values = []
+        for state, action, reward in sar_tuples_reversed:
+            v = reward + (gamma * last_value_estimate)
+            values.append(v)
+            last_value_estimate = v
+
+        values.reverse() # Modifies in place... dangerous
+
+        # Whoever gave this to us should probably have the values themselves.
+        return values
+
+    def create_rollout_matrix_from_data(self, states, actions, num_rollouts, true_values, gamma=0.99):
+        """
+        True values are passed through from the `create-targets_for_episode`
+        But this may be from multiple episodes, so I don't wanna just call it with the episode
+        input
+        """
+        all_estimates = []
+        for s, a, v in zip(states, actions, true_values):
+            estimates = self.get_value_for_rollouts(s, a, num_rollouts, gamma=gamma)
+            all_estimates.append(estimates)
+
+        # This is a 100 x 5 matrix or something.
+        return all_estimates
+
+    def calculate_bias_for_rollouts(self, all_estimates, true_values):
+        true_values = np.asarray(true_values)
+        true_values = true_values.reshape(-1, 1) # So you can subtract it...
+        # true_values = np.expand_dims(true_values, -1) # So you can subtract it...
+        all_estimates = np.asarray(all_estimates)
+        difference_matrix = all_estimates - true_values
+        bias = difference_matrix.mean(axis=0)  # This is what you have to SUBTRACT!
+        print(f"Size of bias is {bias}")
+        return bias
+
+    def calculate_variance_for_debiased_rollouts(self, debiased_estimates, true_values):
+        true_values = np.asarray(true_values)
+        true_values = true_values.reshape(-1, 1) # So you can subtract it...
+        debiased_estimates = np.asarray(debiased_estimates)
+        difference_matrix = debiased_estimates - true_values # The mean should be very close to zero...
+        assert np.allclose(difference_matrix.mean(axis=0), 0) # Make sure we're using debiased..
+        independent_variance = np.var(difference_matrix, axis=0)
+        print(f"shape of independent_variance is {independent_variance.shape}")
+        return independent_variance
+
+
+
 
     def _get_best_action_from_functional(self, functional):
         """
