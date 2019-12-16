@@ -39,46 +39,63 @@ class Composer:
     """
 
     def __init__(self, *, q_agent, world_model, action_size, device):
-        """I'm just not sure we want to use the termination network yet... I don't know if training it will be if we even want to use the termination network..."""
+        """
+        I'm just not sure we want to use the termination network yet... I don't know if training it will be if we even want to use the termination network...
+        """
         self.q_agent = q_agent
         self.world_model = world_model
         self.action_size = action_size
         self.device = device
 
-    def create_targets_for_episode(self, *, states, actions, rewards, true_finish=True, gamma=0.99, last_next_state):
+    def create_targets_for_episodes(self, experiences, gamma=0.99):
         """
-        It's a little confusing because in some sense, if something finishes because
-        its out of time, we don't want to incorporate that into the MDP... Not sure
-        exactly what to do there.
-
-        We're getting the TRUE q values for all of these things...
-
-        Just start from the end and add up?
-
-        Should there be one more state than rewards? Because of "next state?" Not sure.
-        Probably honestly. It's our best estimate of value at least.
+        This one essentially takes in a replay buffer. That way I can just iterate backwards.
+        Okay, it's going to zip straight back. Pretty nice.
+        experiences:
+            list of named tuples with keys 
+            ["state","action","reward","next_state", "done", "time_limit_truncated"] 
         """
-        if not true_finish:
-            if last_next_state is None:
-                raise Exception("If it's not a true finish, you need the next state's value!")
-            last_value_estimate = max(self.q_agent.get_qvalues(last_next_state))
-            # I NEED TO MAKE THIS PYTHONED.
-        else:
-            last_value_estimate = 0
-
-        sar_tuples = list(zip(states, actions, rewards))
-        sar_tuples_reversed = list(reversed(sar_tuples))
 
         values = []
-        for state, action, reward in sar_tuples_reversed:
-            v = reward + (gamma * last_value_estimate)
-            values.append(v)
-            last_value_estimate = v
+        last_value = 0
+        for exp in reversed(experiences):
+            if exp.done:
+                if exp.time_limit_truncated:
+                    
+                    last_value = self.q_agent.get_value(exp.next_state)
+                    # import ipdb; ipdb.set_trace()
+                    # print('singer')
+                else:
+                    last_value = 0
+            value = exp.reward + (gamma*last_value)
+            values.append(value)
+            last_value = value
+        # zipped
 
-        values.reverse() # Modifies in place... dangerous
-
-        # Whoever gave this to us should probably have the values themselves.
+        values.reverse() # In place, always confusing
         return values
+
+    def create_bias_variance_from_data(self, experiences, num_rollouts, gamma=0.99):
+        """
+        The big boy!!!
+        """
+        states = [exp.state for exp in experiences]
+        actions = [exp.action for exp in experiences]
+
+        true_values = self.create_targets_for_episodes(experiences, gamma=gamma)
+        all_estimates = self.create_rollout_matrix_from_data(
+            states, actions, num_rollouts, true_values, gamma=gamma)
+
+        # import ipdb; ipdb.set_trace()
+
+        bias = self.calculate_bias_for_rollouts(all_estimates, true_values)
+        variance = self.calculate_variance_for_rollouts(all_estimates, true_values)
+
+        return bias, variance
+        # unbiased_estimates = all_estimates - 
+        
+
+        pass
 
     def create_rollout_matrix_from_data(self, states, actions, num_rollouts, true_values, gamma=0.99):
         """
@@ -95,27 +112,61 @@ class Composer:
         return all_estimates
 
     def calculate_bias_for_rollouts(self, all_estimates, true_values):
+        """
+        Arguments:
+            all_estimates:
+                All of the rollout values. Something like 5 values for each sample.
+                Equivalent to `X`.
+            true_values:
+                All of the true target values. Equivalent to `Y`
+        """
         true_values = np.asarray(true_values)
         true_values = true_values.reshape(-1, 1) # So you can subtract it...
         # true_values = np.expand_dims(true_values, -1) # So you can subtract it...
         all_estimates = np.asarray(all_estimates)
         difference_matrix = all_estimates - true_values
         bias = difference_matrix.mean(axis=0)  # This is what you have to SUBTRACT!
-        print(f"Size of bias is {bias}")
+        # print(f"Size of bias is {bias}")
         return bias
 
-    def calculate_variance_for_debiased_rollouts(self, debiased_estimates, true_values):
+    def calculate_variance_for_rollouts(self, all_estimates, true_values):
+        """
+        Alright, there's actually no need to debias first... I can just skip that part.
+        """
         true_values = np.asarray(true_values)
         true_values = true_values.reshape(-1, 1) # So you can subtract it...
-        debiased_estimates = np.asarray(debiased_estimates)
-        difference_matrix = debiased_estimates - true_values # The mean should be very close to zero...
-        assert np.allclose(difference_matrix.mean(axis=0), 0) # Make sure we're using debiased..
+        # debiased_estimates = np.asarray(debiased_estimates)
+        # difference_matrix = debiased_estimates - true_values # The mean should be very close to zero...
+        # assert np.allclose(difference_matrix.mean(axis=0), 0) # Make sure we're using debiased..
+        difference_matrix = all_estimates - true_values
+
         independent_variance = np.var(difference_matrix, axis=0)
+
         print(f"shape of independent_variance is {independent_variance.shape}")
         return independent_variance
 
 
+    def get_bias_variance_scaled_estimate(self, state, first_action, num_rollouts, bias, variance, gamma=0.99):
+        assert len(bias) == len(variance) == num_rollouts # I may relax this to greater, but whatever.
+        assert all(v > 0 for v in variance)
+        rollout_values = self.get_value_for_rollouts(state, first_action, num_rollouts, gamma=gamma)
+        debiased_rollout_values = rollout_values - bias
+        inverse_variances = [1 / v for v in variance]
+        corrected_estimate = sum(iv*rv for iv, rv in zip(inverse_variances, debiased_rollout_values)) / sum(inverse_variances)
+        return corrected_estimate
 
+        # Is there really any reason to include the bias term? It was important for calculating
+        # the variance, but now that that's done, since variance is fixed and whatnot, it really
+        # is just going to be adding a constant. But at least it was necessary for calculating
+        # variance. NOPE!!!!!
+        # Now that we have debiased values, we can combine them with the covariance thing!
+        
+
+    def get_best_action_for_bias_variance(self, state, num_rollouts, bias, variance, gamma=0.99):
+        def functional(first_action):
+            return self.get_bias_variance_scaled_estimate(state, first_action, num_rollouts, bias, variance, gamma=gamma)
+
+        return self._get_best_action_from_functional(functional)
 
     def _get_best_action_from_functional(self, functional):
         """
@@ -162,7 +213,7 @@ class Composer:
                 ### We're updating it so that it takes termination into account
                 rollout_value = discounted_reward_so_far + (current_discount * q_value)
                 # rollout_value = discounted_reward_so_far + (chance_unterminated * current_discount * q_value)
-                rollout_values.append(rollout_value)
+                rollout_values.append(rollout_value.item())
 
                 # Accumulate reward
                 # r_value = self.r_network(current_state, next_action)

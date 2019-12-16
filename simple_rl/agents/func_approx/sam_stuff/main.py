@@ -110,6 +110,82 @@ def test_render(agent, mdp):
                 break
 
 
+def collect_data_for_bias_variance_calculation(mdp, q_agent, num_runs):
+    """
+    Runs on-policy, and just makes the data that we'll pass to the composer.
+    """
+    exp = namedtuple("Experience", field_names=["state","action","reward","next_state", "done", "time_limit_truncated"])
+    experiences = []
+
+    states = []
+    actions = []
+    rewards = []
+    next_states = []
+    dones = []
+    time_limit_truncateds = []
+ 
+    for _ in range(num_runs):
+        mdp.reset()
+        state = deepcopy(mdp.init_state)
+        state = np.asarray(state.features())
+
+        true_finish = False
+        while True:
+            # action = agent.act(state.features(), train_mode=True)
+            # reward, next_state = mdp.execute_agent_action(action)
+
+
+            action = composer.q_agent.get_best_action(state)
+            reward, next_state = mdp.execute_agent_action(action)
+            # is_terminal = next_state.is_terminal()
+            # time_limit_truncated = next_state.is_time_limit_truncated()
+
+
+            experiences.append(
+                exp(state=state,
+                    action=action,
+                    reward=reward,
+                    next_state=np.asarray(next_state.features()),
+                    done=next_state.is_terminal(),
+                    time_limit_truncated=next_state.is_time_limit_truncated()
+                    ))
+
+            states.append(state)
+            actions.append(action)
+            rewards.append(reward)
+            next_states.append(np.asarray(next_state.features()))
+            dones.append(next_state.is_terminal())
+            time_limit_truncateds.append(next_state.is_time_limit_truncated())
+
+            game_over = mdp.game_over if hasattr(mdp, 'game_over') else False
+
+            if game_over and not next_state.is_terminal():
+                print('howza')
+                # import ipdb; ipdb.set_trace()
+                raise Exception("Honestly, we're just not dealing with this well here.")
+
+            if next_state.is_terminal():
+                break
+
+            state = np.asarray(next_state.features())
+
+
+    return experiences
+
+    # return dict(
+    #     states=states,
+    #     actions=actions,
+    #     rewards=rewards,
+    #     next_states=next_states,
+    #     dones=dones,
+    #     time_limit_truncateds=time_limit_truncateds,
+    # )
+            
+
+
+    pass
+
+
 class Evaluator:
 
     def __init__(self, mdp, composer, num_runs_each=1, rollout_depth=5, lambdas_to_test=None, logdir="."):
@@ -119,6 +195,9 @@ class Evaluator:
         self.rollout_depth = rollout_depth
         self.logdir = logdir
 
+        self._bias = None
+        self._variance = None
+
         if lambdas_to_test is None:
             self.lambdas_to_test = [0.0, 0.5, 1.0]
         else:
@@ -127,18 +206,35 @@ class Evaluator:
 
         self.results = defaultdict(list)
 
+    def _set_bias_variance(self, num_runs_to_collect_over):
+        collect_data_for_bias_variance_calculation(self.mdp, self.composer.q_agent, num_runs_to_collect_over)
+        bias, variance = self.composer.create_bias_variance_from_data(data, 5)
+        self._bias = bias
+        self._variance = variance
+        print(f"Bias: {bias}\nVariance: {variance}")
+
     def evaluate_different_models(self, *, training_steps):
         """
         This does the evaluation, prints out results, but then importantly
         populates some storage list, which we can then use to make plots.
         """
+        assert self._bias is not None
+        assert self._variance is not None
+
         lambdas_to_test = self.lambdas_to_test
         mdp = self.mdp
         composer = self.composer
         num_runs_each = self.num_runs_each
         rollout_depth = self.rollout_depth
 
-        for lam in lambdas_to_test:
+        funcs = [(lam, lambda s: composer.get_best_action_td_lambda(s, rollout_depth, gamma=0.99, lam=lam))
+                for lam in lambdas_to_test]
+
+        funcs.append(("OptimalVariance",
+            lambda s: composer.get_best_action_for_bias_variance(s, rollout_depth, self._bias, self._variance, gamma=0.99)))
+
+        # for lam in lambdas_to_test:
+        for key, func in funcs:
             all_rewards = []
             for _ in range(num_runs_each):
                 mdp.reset()
@@ -147,7 +243,8 @@ class Evaluator:
                 reward_so_far = 0.0
                 while True:
                     # state = torch.from_numpy(state).float().unsqueeze(0).to("cuda")
-                    action = composer.get_best_action_td_lambda(state, rollout_depth, gamma=0.99, lam=lam)
+                    # action = composer.get_best_action_td_lambda(state, rollout_depth, gamma=0.99, lam=lam)
+                    action = func(state)
                     reward, next_state = mdp.execute_agent_action(action)
                     reward_so_far += reward
                     game_over = mdp.game_over if hasattr(mdp, 'game_over') else False
@@ -155,10 +252,10 @@ class Evaluator:
                         break
 
                     state = np.asarray(next_state.features())
-                self.results[lam].append((training_steps, reward_so_far))
+                self.results[key].append((training_steps, reward_so_far))
                 all_rewards.append(reward_so_far)
             all_rewards = np.asarray(all_rewards)
-            print(f"{num_runs_each} runs:     Lam={lam}, Reward={np.mean(all_rewards)} ({np.std(all_rewards)})")
+            print(f"{num_runs_each} runs:     Key={key}, Reward={np.mean(all_rewards)} ({np.std(all_rewards)})")
             print(all_rewards)
 
     def write_graphs(self):
@@ -239,6 +336,8 @@ def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir, 
 
         if episode % 10 == 0:
             print(f"Evaluating on episode {episode}")
+
+            evaluator._set_bias_variance(10)
             evaluator.evaluate_different_models(training_steps=episode)
             print("At some point definitely make this a CL-Arg")
             evaluator.write_graphs()
@@ -379,6 +478,9 @@ if __name__ == '__main__':
         world_model=world_model,
         action_size=action_dim,
         device=device)
+
+    # data = collect_data_for_bias_variance_calculation(overall_mdp, ddqn_agent, 1)
+    # bias, variance = composer.create_bias_variance_from_data(data, 5)
 
 
     if args.mode == 'train':

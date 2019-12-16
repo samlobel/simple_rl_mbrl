@@ -198,7 +198,7 @@ class WorldModel(nn.Module):
         # if self.tensor_log:
         if self.tensor_log and self.num_updates % LOG_EVERY == 0:
             # print('logging...')
-            print(self.num_updates)
+            # print(self.num_updates)
             self.writer.add_scalar("Total-WorldModel-Loss", loss.item(), self.num_updates)
             self.writer.add_scalar("Transition-Prediction-Loss", transition_error.item(), self.num_updates)
             self.writer.add_scalar("Reward-Prediction-Loss", reward_error.item(), self.num_updates)
@@ -350,9 +350,11 @@ class DQNAgent(Agent, nn.Module):
     def get_best_action(self, state):
         """
         This was written by Sam, meaning you just can't trust it.
+        This should really be returning a SINGLE VALUE... It returns a torch
+        tensor right now.
         """
         q_values = self.get_qvalues(state)
-        return torch.argmax(q_values)
+        return torch.argmax(q_values).item()
 
     def get_value(self, state):
         action_values = self.get_qvalues(state)
