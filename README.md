@@ -1,3 +1,53 @@
+# SAM NOTES:
+
+WHERE DID I LEAVE OFF? I wrote something to get me a state-independent bias/variance for each rollout. But I still need to do the thing that gets it the data in the first place.
+
+SHOOT. The bias part is pretty unnecessary as far as actually adding the values. But it is helpful as far as calculating the variance per sample goes. I don't know actually.
+Actually, honestly it's not so clear how the bias comes into play. We get the difference between the real and the calculated for each depth. That's the thing that we're measuring.
+
+There's still something better about it though, because STEVE doesn't directly compare to the truth, only to its own uncertainty. So, if STEVE is pretty sure about the values for the first estimate, it might assign a high value to it. Regardless of whether the first one is historically close to right. But mine would realize, the first one ain't all that actually.
+
+So, we could see how we would potentially adjust things in the case that our Q-function was noisy and biased. I'm really not sure. I guess another weird thing is, STEVE uses variance within a set to determine if you should trust it. BUT, isn't that sort of ignoring the fact that the mean value for all the different lengths is going to be different? That should probably tell you something in itself. But I guess that's the point, is you have a bunch of different measurements, and you get their variance, and then you can take their weighted average? Seems very smart to me. But you can definitely imagine having a limited function class and ending up with the same answer for all of a certain state's values, but them all being wrong in the same direction... Not sure exactly how this should work out.
+
+I think we could probably do an example with a linear model, that is helpful despite being not great. Because probably one of the bigger sources of bias or correlated variance is a too-weak model.
+
+
+To run Akhil's stuff:
+`python DQNAgentClass.py --experiment_name testing-exp --pixel_observation True`
+But I'm going to switch it to working without videos, because no way I'm doing this on videos.
+I want it to work with: 
+`python main.py --experiment_name testing-exp --env CartPole-v1`
+
+
+MAYBE I should be just trying to get it to work with one-step models. It's not perfect,
+but it's the way people have done it for a long time now. And it means I can use other people's replay buffers and whatnot. I think I'll do that, it's not perfect but it's something.
+
+But, we do need some sort of long transition in order to generate a target for the correlation matrix or whatever.
+
+For now, I can do that as an outer loop of some sort? I mean, we're working with pretty fast environments with small state spaces...
+
+So, I need a training function. It should be doing something like training a DQN alongside the models. This really shouldn't be all that hard. It would be nice if we could somehow integrate these things all to be part of one object. That way, among other things, we could make our learner really "on policy" instead of just acting with accordance to the DQN. Would we need target-networks for the models? I don't think so, since there's no chance of explosion or whatever.
+
+
+Small complication: if we make our covariance matrix on the fly, how do we deal with off-policy anything?
+One option is to include epsilon greedy in rollouts. Another is to only train it on-policy after first
+action... Not sure really.
+
+There's a bunch of stuff about steps because it's the options framework. I don't really need any of that, should I just completely take it out? No, it's set to 1 here, that' really fine.
+
+can't keep up with logging it seems, because it's logging too fast. making it not log every step means it's doing a lot better...
+
+Okay, so: what do I want to do exactly? I think I want to act totally on-policy, at least to start.
+I'll need a calculate-covariance function. I'll need a "calculate_bias_covariance_from_data function."
+I need something that actually generates the data first. It'll end up being something simple like a matrix that has a bunch of values, that we then fit a linear model to? Should we allow for that? I don't really know to be honest.
+
+I can first do a simple comparison that implements TD-lambda, and compares against how it does without it. How do I compare? I think I need to make a new function, that runs a test occasionally, and maybe logs the results? Maybe average over 100 trials or something.
+
+
+
+
+
+
 # simple_rl
 A simple framework for experimenting with Reinforcement Learning in Python.
 
