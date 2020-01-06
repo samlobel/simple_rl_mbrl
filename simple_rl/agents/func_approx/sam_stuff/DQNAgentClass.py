@@ -44,6 +44,43 @@ NUM_STEPS = 10000
 
 LOG_EVERY=10
 
+# TODO: I should add an option to use a central replay-buffer. That way, we don't
+# need to keep like a million of them around that all have the same data.
+
+# TODO: Do I need to add a empirical-Q entry to the replay buffer? I think I do...
+# That's annoying, that means I need to do it only at the end of an episode. Oh well.
+# I need to do constant covariance updates I think, because our model and Q-functions
+# are always going to be changing as well.
+
+class OnlineComposer(nn.Module):
+    """
+    This acts surprisingly similar to the Composer in ModelQNetworkComposer.py
+    Except that it acts online, and uses the composer to provide better updates,
+    as opposed to better evaluation. I guess it could do both....
+
+    I think that I actually need to walk through an entire episode in order to add to the
+    replay buffer here. The reason being, if I want the GROUND TRUTH values for the
+    Q functions, we need an entire trajectory's data. That definitely changes things.
+    """
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def forward(self, *args, **kwargs):
+        pass
+
+    def step(self, *args, **kwargs):
+        pass
+    
+    def _learn(self, *args, **kwargs):
+        pass
+    
+    def _update_covariance(self, *args, **kwargs):
+        pass
+
+
+
+
 class WorldModel(nn.Module):
     """Sort of like DQNAgent for the world-model.
     This should be helpful because we can use it to train all the things
