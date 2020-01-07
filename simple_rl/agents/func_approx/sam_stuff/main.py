@@ -458,14 +458,14 @@ if __name__ == '__main__':
     # device = torch.device("cpu")
 
     ddqn_agent = DQNAgent(state_size=state_dim, action_size=action_dim,
-                        trained_options=[], seed=args.seed, device=device,
+                        seed=args.seed, device=device,
                         name="GlobalDDQN", lr=learning_rate, tensor_log=args.tensor_log, use_double_dqn=True,
                         exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
                         evaluation_epsilon=args.eval_eps,
                         epsilon_linear_decay=args.epsilon_linear_decay)
 
     world_model = WorldModel(state_size=state_dim, action_size=action_dim,
-                        trained_options=[], seed=args.seed, device=device,
+                        seed=args.seed, device=device,
                         name="WorldModel", lr=learning_rate, tensor_log=args.tensor_log,# use_double_dqn=True,
                         #exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
                         #evaluation_epsilon=args.eval_eps,
@@ -479,8 +479,8 @@ if __name__ == '__main__':
         action_size=action_dim,
         device=device)
 
-    # data = collect_data_for_bias_variance_calculation(overall_mdp, ddqn_agent, 1)
-    # bias, variance = composer.create_bias_variance_from_data(data, 5)
+    data = collect_data_for_bias_variance_calculation(overall_mdp, ddqn_agent, 1)
+    bias, variance = composer.create_bias_variance_from_data(data, 5)
 
 
     if args.mode == 'train':

@@ -96,7 +96,8 @@ class WorldModel(nn.Module):
     This should be helpful because we can use it to train all the things
     at once.
     """
-    def __init__(self, state_size, action_size, trained_options, seed, device, name="WorldModel",
+    def __init__(self, state_size, action_size,
+                 seed, device, name="WorldModel",
                  # eps_start=1.,
                  tensor_log=False, lr=LR,
                  # use_double_dqn=True,
@@ -111,15 +112,10 @@ class WorldModel(nn.Module):
 
         self.state_size = state_size
         self.action_size = action_size
-        self.trained_options = trained_options
         self.learning_rate = lr
-        # self.use_ddqn = use_double_dqn
         self.gamma = gamma
         # I'm going to just do MSE for losses.
-        # self.loss_function = loss_function
         self.gradient_clip = gradient_clip
-        # self.evaluation_epsilon = evaluation_epsilon
-        # self.exploration_method = exploration_method
         self.pixel_observation = pixel_observation
         self.seed = random.seed(seed)
         np.random.seed(seed)
@@ -262,7 +258,8 @@ class DQNAgent(Agent, nn.Module):
     Why do I add the "module" part? I really don't remember.
     """
 
-    def __init__(self, state_size, action_size, trained_options, seed, device, name="DQN-Agent",
+    def __init__(self, state_size, action_size,
+                 seed, device, name="DQN-Agent",
                  eps_start=1., tensor_log=False, lr=LR, use_double_dqn=True, gamma=GAMMA, loss_function="huber",
                  gradient_clip=None, evaluation_epsilon=0.05, exploration_method="eps-greedy",
                  pixel_observation=False, writer=None,
@@ -271,7 +268,6 @@ class DQNAgent(Agent, nn.Module):
 
         self.state_size = state_size
         self.action_size = action_size
-        self.trained_options = trained_options
         self.learning_rate = lr
         self.use_ddqn = use_double_dqn
         self.gamma = gamma
@@ -325,29 +321,6 @@ class DQNAgent(Agent, nn.Module):
 
         Agent.__init__(self, name, range(action_size), GAMMA)
 
-    def get_impossible_option_idx(self, state):
-
-        # Arg-max only over actions that can be executed from the current state
-        # -- In general an option can be executed from s if s is in its initiation set and NOT in its termination set
-        # -- However, in the case of the goal option we just need to ensure that we are in its initiation set since
-        # -- its termination set is terminal anyway and we are thus not in the risk of executing og from its
-        # -- termination set.
-
-        impossible_option_idx = []
-        for idx, option in enumerate(self.trained_options):
-            np_state = state.cpu().data.numpy()[0] if not isinstance(state, np.ndarray) else state
-
-            if option.parent is None:
-                assert option.name == "overall_goal_policy" or option.name == "global_option"
-                impossible = not option.is_init_true(np_state)
-            else:
-                impossible = (not option.is_init_true(np_state)) or option.is_term_true(np_state)
-
-            if impossible:
-                impossible_option_idx.append(idx)
-
-        return impossible_option_idx
-
     def act(self, state, train_mode=True):
         """
         Interface to the DQN agent: state can be output of env.step() and returned action can be input into next step().
@@ -368,22 +341,13 @@ class DQNAgent(Agent, nn.Module):
             action_values = self.policy_network(state)
         self.policy_network.train()
 
-        impossible_option_idx = self.get_impossible_option_idx(state)
-
-        for impossible_idx in impossible_option_idx:
-            action_values[0][impossible_idx] = torch.min(action_values, dim=1)[0] - 1.
-
         action_values = action_values.cpu().data.numpy()
 
         # Epsilon-greedy action selection
         if random.random() > epsilon:
             return np.argmax(action_values)
 
-        all_option_idx = list(range(len(self.trained_options))) if len(self.trained_options) > 0 else self.actions
-        possible_option_idx = list(set(all_option_idx).difference(impossible_option_idx))
-        randomly_chosen_option = random.choice(possible_option_idx)
-
-        return randomly_chosen_option
+        return random.choice(list(set(self.actions)))
     
     def forward(self, *args, **kwargs):
         print("This probably shouldn't be called, I'm mainly including it so that we can have the save option work.")
@@ -408,10 +372,6 @@ class DQNAgent(Agent, nn.Module):
         action_values = self.get_qvalues(state)
 
         # Argmax only over actions that can be implemented from the current state
-        impossible_option_idx = self.get_impossible_option_idx(state)
-        for impossible_idx in impossible_option_idx:
-            action_values[0][impossible_idx] = torch.min(action_values).item() - 1.
-
         return np.max(action_values.cpu().data.numpy())
 
     def get_qvalue(self, state, action_idx):
@@ -448,22 +408,6 @@ class DQNAgent(Agent, nn.Module):
         with torch.no_grad():
             action_values = self.policy_network(states)
         self.policy_network.train()
-
-        if len(self.trained_options) > 0:
-            # Move the states and action values to the cpu to allow numpy computations
-            states = states.cpu().data.numpy()
-            action_values = action_values.cpu().data.numpy()
-
-            for idx, option in enumerate(self.trained_options): # type: Option
-                try:
-                    inits = option.batched_is_init_true(states)
-                    terms = np.zeros(inits.shape) if option.parent is None else option.parent.batched_is_init_true(states)
-                    action_values[(inits.squeeze() != 1) | (terms.squeeze() == 1), idx] = np.min(action_values) - 1.
-                except:
-                    pdb.set_trace()
-
-            # Move the q-values back the GPU
-            action_values = torch.from_numpy(action_values).float().to(self.device)
 
         return action_values
 
@@ -509,13 +453,10 @@ class DQNAgent(Agent, nn.Module):
         # Get max predicted Q values (for next states) from target model
         if self.use_ddqn:
 
-            if len(self.trained_options) == 0:
-                self.policy_network.eval()
-                with torch.no_grad():
-                    selected_actions = self.policy_network(next_states).argmax(dim=1).unsqueeze(1)
-                self.policy_network.train()
-            else:
-                selected_actions = self.get_best_actions_batched(next_states).unsqueeze(1)
+            self.policy_network.eval()
+            with torch.no_grad():
+                selected_actions = self.policy_network(next_states).argmax(dim=1).unsqueeze(1)
+            self.policy_network.train()
 
             Q_targets_next = self.target_network(next_states).detach().gather(1, selected_actions)
         else:
@@ -746,7 +687,7 @@ if __name__ == '__main__':
     # device = torch.device("cpu")
 
     ddqn_agent = DQNAgent(state_size=state_dim, action_size=len(overall_mdp.actions),
-                          trained_options=[], seed=args.seed, device=device,
+                          seed=args.seed, device=device,
                           name="GlobalDDQN", lr=learning_rate, tensor_log=args.tensor_log, use_double_dqn=True,
                           exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
                           evaluation_epsilon=args.eval_eps)
