@@ -45,12 +45,18 @@ NUM_STEPS = 10000
 LOG_EVERY=10
 
 # TODO: I should add an option to use a central replay-buffer. That way, we don't
-# need to keep like a million of them around that all have the same data.
+# need to keep like a million of them around that all have the same data. Also that way,
+# I can control how things get passed in from one central location. 
 
-# TODO: Do I need to add a empirical-Q entry to the replay buffer? I think I do...
+# TODO: Do I need to add a empirical-Q entry to the replay buffer? No, I'll just
+# do those updates totally within the online Q composer, no buffer necessary.
 # That's annoying, that means I need to do it only at the end of an episode. Oh well.
 # I need to do constant covariance updates I think, because our model and Q-functions
 # are always going to be changing as well.
+
+# TODO: I need to implement/copy a SAC model into here. It honestly doesn't seem all
+# that bad to do myself. But also, there's a lot I can do myself before then. In
+# cartpole I can just do a DQN with soft actions, and a decaying gamma.
 
 class OnlineComposer(nn.Module):
     """
@@ -61,10 +67,14 @@ class OnlineComposer(nn.Module):
     I think that I actually need to walk through an entire episode in order to add to the
     replay buffer here. The reason being, if I want the GROUND TRUTH values for the
     Q functions, we need an entire trajectory's data. That definitely changes things.
+    I can expect that this is the thing that interacts directly with the environment.
+    So we can just store a single episode on this.
+
     """
 
     def __init__(self, *args, **kwargs):
-        pass
+        nn.Module.__init__(self)
+
 
     def forward(self, *args, **kwargs):
         pass
@@ -364,6 +374,7 @@ class DQNAgent(Agent, nn.Module):
             action_values[0][impossible_idx] = torch.min(action_values, dim=1)[0] - 1.
 
         action_values = action_values.cpu().data.numpy()
+
         # Epsilon-greedy action selection
         if random.random() > epsilon:
             return np.argmax(action_values)
