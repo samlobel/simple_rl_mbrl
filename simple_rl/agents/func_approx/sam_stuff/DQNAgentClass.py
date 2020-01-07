@@ -263,6 +263,8 @@ class DQNAgent(Agent, nn.Module):
                  eps_start=1., tensor_log=False, lr=LR, use_double_dqn=True, gamma=GAMMA, loss_function="huber",
                  gradient_clip=None, evaluation_epsilon=0.05, exploration_method="eps-greedy",
                  pixel_observation=False, writer=None,
+                 use_softmax_target=False,
+                 softmax_temperature=0.1,
                  epsilon_linear_decay=100000):
         nn.Module.__init__(self)
 
@@ -280,6 +282,9 @@ class DQNAgent(Agent, nn.Module):
         np.random.seed(seed)
         self.tensor_log = tensor_log
         self.device = device
+        self.use_softmax_target = use_softmax_target
+        if self.use_softmax_target:
+            self.temperature = softmax_temperature # Why the heck not.
 
         # Q-Network
         if pixel_observation:
@@ -348,16 +353,12 @@ class DQNAgent(Agent, nn.Module):
             return np.argmax(action_values)
 
         return random.choice(list(set(self.actions)))
-    
+
     def forward(self, *args, **kwargs):
         print("This probably shouldn't be called, I'm mainly including it so that we can have the save option work.")
         to_return = self.act(self, *args, **kwargs)
         print("Called the act method as a submethod, returning now.")
         return to_return
-
-    def get_best_actions_batched(self, states):
-        q_values = self.get_batched_qvalues(states)
-        return torch.argmax(q_values, dim=1)
 
     def get_best_action(self, state):
         """
@@ -369,10 +370,34 @@ class DQNAgent(Agent, nn.Module):
         return torch.argmax(q_values).item()
 
     def get_value(self, state):
+        """
+        Gets the "true" value for the state, meaning what would happen if you took the
+        best action from here.
+
+        THIS ONLY WORKS IF ITS A SINGLE STATE!!!!!
+        """
+        print("Ideally, I would like this to work with either one or many samples," +
+              " and just return in kind")
         action_values = self.get_qvalues(state)
 
         # Argmax only over actions that can be implemented from the current state
         return np.max(action_values.cpu().data.numpy())
+
+    def get_softmax_value(self, state, temperature):
+        """This takes actions proportionately to their value"""
+        action_values = self.get_qvalues(state)
+        # Really not sure about dim...
+        print('really not sure about the dim, it should work for all sizes though.')
+        probability = F.softmax(action_values / temperature, dim=-1) 
+        weighted_values = action_values * probability # elem-wise
+        summed_weighted_values = weighted_values.sum(dim=-1)
+        return summed_weighted_values.cpu().data.numpy()
+
+    def get_softmax_action(self, state, temperature):
+        """I think I can use torch.multinomial for this..."""
+        action_values = self.get_qvalues(state)
+        temperatured_action_values = action_values / temperature
+        return torch.multinomial(temperatured_action_values, num_samples=1).unsqueeze(-1)
 
     def get_qvalue(self, state, action_idx):
         if isinstance(state, np.ndarray):
@@ -442,6 +467,9 @@ class DQNAgent(Agent, nn.Module):
         Args:
             experiences (tuple<torch.Tensor>): tuple of (s, a, r, s', done, tau) tuples
             gamma (float): discount factor
+
+        When we do this softmax thing, we should really be doing it with the policy network
+        choosing actions and the target network giving values. For consistency.
         """
         states, actions, rewards, next_states, dones, steps, time_limit_truncateds = experiences
 
@@ -452,15 +480,29 @@ class DQNAgent(Agent, nn.Module):
 
         # Get max predicted Q values (for next states) from target model
         if self.use_ddqn:
+            # I feel like there's a whole lot of re-doing of turning off gradients.
+            # That's a problem for later though.
 
             self.policy_network.eval()
             with torch.no_grad():
-                selected_actions = self.policy_network(next_states).argmax(dim=1).unsqueeze(1)
+                if self.use_softmax_target:
+                    temperature = self.temperature
+                    action_probabilities = F.softmax(self.policy_network(next_states) / temperature, dim=-1)
+                    # action_probabilities = (self.policy_network(next_states) / temperature).multinomial(1)
+                else: # Using max instead.
+                    selected_actions = self.policy_network(next_states).argmax(dim=1).unsqueeze(1)
             self.policy_network.train()
 
-            Q_targets_next = self.target_network(next_states).detach().gather(1, selected_actions)
+            if self.use_softmax_target:
+                Q_targets_next = (self.target_network(next_states).detach() * action_probabilities).sum(-1)
+            else:
+                Q_targets_next = self.target_network(next_states).detach().gather(1, selected_actions)
         else:
-            Q_targets_next = self.target_network(next_states).detach().max(1)[0].unsqueeze(1)
+            if self.use_softmax_target:
+                raise NotImplementedError("Cause it's not working below either...")
+                pass
+            else:
+                Q_targets_next = self.target_network(next_states).detach().max(1)[0].unsqueeze(1)
             raise NotImplementedError("I have not fixed the Q(s',a') problem for vanilla DQN yet")
 
         # Options in SMDPs can take multiple steps to terminate, the Q-value needs to be discounted appropriately

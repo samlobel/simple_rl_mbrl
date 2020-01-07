@@ -432,6 +432,7 @@ if __name__ == '__main__':
     parser.add_argument("--save_every", type=int, help="Save every n seconds", default=60)
     parser.add_argument("--mode", type=str, help="'train' or 'view'", default='train')
     parser.add_argument("--epsilon_linear_decay", type=int, help="'train' or 'view'", default=100000)
+    parser.add_argument("--use_softmax_target", default=False, action='store_true', help='When calculating backups, do you use the max or the softmax?')
     # parser.add_argument("--use_world_model", default=False, action='store_true', help="Include this option if you want to see how a world model trains.")
     args = parser.parse_args()
 
@@ -462,7 +463,8 @@ if __name__ == '__main__':
                         name="GlobalDDQN", lr=learning_rate, tensor_log=args.tensor_log, use_double_dqn=True,
                         exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
                         evaluation_epsilon=args.eval_eps,
-                        epsilon_linear_decay=args.epsilon_linear_decay)
+                        epsilon_linear_decay=args.epsilon_linear_decay,
+                        use_softmax_target=args.use_softmax_target)
 
     world_model = WorldModel(state_size=state_dim, action_size=action_dim,
                         seed=args.seed, device=device,
