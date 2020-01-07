@@ -207,7 +207,7 @@ class Evaluator:
         self.results = defaultdict(list)
 
     def _set_bias_variance(self, num_runs_to_collect_over):
-        collect_data_for_bias_variance_calculation(self.mdp, self.composer.q_agent, num_runs_to_collect_over)
+        data = collect_data_for_bias_variance_calculation(self.mdp, self.composer.q_agent, num_runs_to_collect_over)
         bias, variance = self.composer.create_bias_variance_from_data(data, 5)
         self._bias = bias
         self._variance = variance
