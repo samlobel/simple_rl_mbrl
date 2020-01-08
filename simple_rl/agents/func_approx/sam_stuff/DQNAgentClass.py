@@ -264,7 +264,8 @@ class DQNAgent(Agent, nn.Module):
                  gradient_clip=None, evaluation_epsilon=0.05, exploration_method="eps-greedy",
                  pixel_observation=False, writer=None,
                  use_softmax_target=False,
-                 softmax_temperature=0.1,
+                #  softmax_temperature=0.1,
+                softmax_temperature=1.0,
                  epsilon_linear_decay=100000):
         nn.Module.__init__(self)
 
@@ -342,8 +343,16 @@ class DQNAgent(Agent, nn.Module):
         state = np.array(state)  # Lazy Frame
         state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
         self.policy_network.eval()
+
+        if self.use_softmax_target:
+            with torch.no_grad():
+                chosen_action = self.get_softmax_action(state, self.temperature)
+            return chosen_action.item()
+
+
         with torch.no_grad():
             action_values = self.policy_network(state)
+
         self.policy_network.train()
 
         action_values = action_values.cpu().data.numpy()
@@ -395,9 +404,12 @@ class DQNAgent(Agent, nn.Module):
 
     def get_softmax_action(self, state, temperature):
         """I think I can use torch.multinomial for this..."""
-        action_values = self.get_qvalues(state)
+        # print('bingo bop')
+        # import pdb; pdb.set_trace()
+        action_values = self.get_qvalues(state).squeeze(0)
         temperatured_action_values = action_values / temperature
-        return torch.multinomial(temperatured_action_values, num_samples=1).unsqueeze(-1)
+        probability = F.softmax(temperatured_action_values, dim=-1)
+        return torch.multinomial(probability, num_samples=1).unsqueeze(-1)
 
     def get_qvalue(self, state, action_idx):
         if isinstance(state, np.ndarray):
