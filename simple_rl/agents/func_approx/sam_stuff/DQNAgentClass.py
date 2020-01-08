@@ -25,8 +25,7 @@ from simple_rl.agents.func_approx.sam_stuff.replay_buffer import ReplayBuffer
 from simple_rl.agents.func_approx.sam_stuff.model import ConvQNetwork, DenseQNetwork
 from simple_rl.agents.func_approx.sam_stuff.epsilon_schedule import *
 from simple_rl.tasks.gym.GymMDPClass import GymMDP
-from simple_rl.tasks.lunar_lander.LunarLanderMDPClass import LunarLanderMDP
-from simple_rl.agents.func_approx.sam_stuff.RandomNetworkDistillationClass import RNDModel, RunningMeanStd
+# from simple_rl.tasks.lunar_lander.LunarLanderMDPClass import LunarLanderMDP
 
 from simple_rl.agents.func_approx.sam_stuff.model import DenseTransitionModel, DenseRewardModel, DenseTerminationModel
 
@@ -57,37 +56,6 @@ LOG_EVERY=10
 # TODO: I need to implement/copy a SAC model into here. It honestly doesn't seem all
 # that bad to do myself. But also, there's a lot I can do myself before then. In
 # cartpole I can just do a DQN with soft actions, and a decaying gamma.
-
-class OnlineComposer(nn.Module):
-    """
-    This acts surprisingly similar to the Composer in ModelQNetworkComposer.py
-    Except that it acts online, and uses the composer to provide better updates,
-    as opposed to better evaluation. I guess it could do both....
-
-    I think that I actually need to walk through an entire episode in order to add to the
-    replay buffer here. The reason being, if I want the GROUND TRUTH values for the
-    Q functions, we need an entire trajectory's data. That definitely changes things.
-    I can expect that this is the thing that interacts directly with the environment.
-    So we can just store a single episode on this.
-
-    """
-
-    def __init__(self, *args, **kwargs):
-        nn.Module.__init__(self)
-
-
-    def forward(self, *args, **kwargs):
-        pass
-
-    def step(self, *args, **kwargs):
-        pass
-    
-    def _learn(self, *args, **kwargs):
-        pass
-    
-    def _update_covariance(self, *args, **kwargs):
-        pass
-
 
 
 
@@ -306,10 +274,6 @@ class DQNAgent(Agent, nn.Module):
         if exploration_method == "eps-greedy":
             self.epsilon_schedule = GlobalEpsilonSchedule(eps_start, evaluation_epsilon, eps_lin_dec=epsilon_linear_decay) if "global" in name.lower() else OptionEpsilonSchedule(eps_start)
             self.epsilon = eps_start
-        elif exploration_method == "rnd":
-            self.epsilon_schedule = GlobalEpsilonSchedule(eps_start, evaluation_epsilon, eps_lin_dec=epsilon_linear_decay)  # ConstantEpsilonSchedule(evaluation_epsilon)
-            self.epsilon = eps_start
-            self.rnd = RNDModel(device=device)
         else:
             raise NotImplementedError("{} not implemented", exploration_method)
 
@@ -337,6 +301,10 @@ class DQNAgent(Agent, nn.Module):
         Returns:
             action (int): integer representing the action to take in the Gym env
         """
+        if train_mode == False and self.use_softmax_target:
+            print("Probably something wrong going on here, contradictory options")
+            raise Exception("Contraaaadicion!")
+
         self.num_executions += 1
         epsilon = self.epsilon if train_mode else self.evaluation_epsilon
 
@@ -473,7 +441,7 @@ class DQNAgent(Agent, nn.Module):
                     self.writer.add_scalar("NumPositiveTransitions", self.replay_buffer.positive_transitions[-1], self.num_updates)
                 self.num_updates += 1
 
-    def _learn(self, experiences, gamma):
+    def _learn(self, experiences, gamma, Q_targets_next=None):
         """
         Update value parameters using given batch of experience tuples.
         Args:
@@ -485,37 +453,33 @@ class DQNAgent(Agent, nn.Module):
         """
         states, actions, rewards, next_states, dones, steps, time_limit_truncateds = experiences
 
-        if self.exploration_method == "rnd":
-            observations = states[:, -1, :, :].unsqueeze(1)
-            intrinsic_rewards = self.rnd(observations)
-            self.rnd.update(intrinsic_rewards)
+        if Q_targets_next is not None:
+            # Get max predicted Q values (for next states) from target model
+            if self.use_ddqn:
+                # I feel like there's a whole lot of re-doing of turning off gradients.
+                # That's a problem for later though.
 
-        # Get max predicted Q values (for next states) from target model
-        if self.use_ddqn:
-            # I feel like there's a whole lot of re-doing of turning off gradients.
-            # That's a problem for later though.
+                self.policy_network.eval()
+                with torch.no_grad():
+                    if self.use_softmax_target:
+                        temperature = self.temperature
+                        action_probabilities = F.softmax(self.policy_network(next_states) / temperature, dim=-1)
+                        # action_probabilities = (self.policy_network(next_states) / temperature).multinomial(1)
+                    else: # Using max instead.
+                        selected_actions = self.policy_network(next_states).argmax(dim=1).unsqueeze(1)
+                self.policy_network.train()
 
-            self.policy_network.eval()
-            with torch.no_grad():
                 if self.use_softmax_target:
-                    temperature = self.temperature
-                    action_probabilities = F.softmax(self.policy_network(next_states) / temperature, dim=-1)
-                    # action_probabilities = (self.policy_network(next_states) / temperature).multinomial(1)
-                else: # Using max instead.
-                    selected_actions = self.policy_network(next_states).argmax(dim=1).unsqueeze(1)
-            self.policy_network.train()
-
-            if self.use_softmax_target:
-                Q_targets_next = (self.target_network(next_states).detach() * action_probabilities).sum(-1)
+                    Q_targets_next = (self.target_network(next_states).detach() * action_probabilities).sum(-1)
+                else:
+                    Q_targets_next = self.target_network(next_states).detach().gather(1, selected_actions)
             else:
-                Q_targets_next = self.target_network(next_states).detach().gather(1, selected_actions)
-        else:
-            if self.use_softmax_target:
-                raise NotImplementedError("Cause it's not working below either...")
-                pass
-            else:
-                Q_targets_next = self.target_network(next_states).detach().max(1)[0].unsqueeze(1)
-            raise NotImplementedError("I have not fixed the Q(s',a') problem for vanilla DQN yet")
+                if self.use_softmax_target:
+                    raise NotImplementedError("Cause it's not working below either...")
+                    pass
+                else:
+                    Q_targets_next = self.target_network(next_states).detach().max(1)[0].unsqueeze(1)
+                raise NotImplementedError("I have not fixed the Q(s',a') problem for vanilla DQN yet")
 
         # Options in SMDPs can take multiple steps to terminate, the Q-value needs to be discounted appropriately
         discount_factors = gamma ** steps
@@ -577,134 +541,53 @@ class DQNAgent(Agent, nn.Module):
         if self.tensor_log:
             self.writer.add_scalar("DQN-Epsilon", self.epsilon, self.num_epsilon_updates)
 
-# def train(agent, mdp, episodes, steps, init_episodes=10):
-#     per_episode_scores = []
-#     last_10_scores = deque(maxlen=100)
-#     iteration_counter = 0
-#     state_ri_buffer = []
 
-#     # Observation and reward normalization
-#     reward_rms = RunningMeanStd()
-#     obs_rms = RunningMeanStd(shape=(1, 84, 84))
+class OnlineComposer(DQNAgent):
+    """
+    This acts surprisingly similar to the Composer in ModelQNetworkComposer.py
+    Except that it acts online, and uses the composer to provide better updates,
+    as opposed to better evaluation. I guess it could do both....
 
-#     # Initialize the RMS normalizers
-#     if agent.exploration_method == "rnd":
-#         for episode in range(init_episodes):
-#             observation_buffer = []
-#             mdp.reset()
-#             init_observation = np.array(mdp.init_state.features())[-1, :, :]
-#             assert init_observation.shape == (84, 84), init_observation.shape
-#             observation_buffer.append(init_observation)
-#             while True:
-#                 action = np.random.randint(0, overall_mdp.env.action_space.n)
-#                 r, state = mdp.execute_agent_action(action)
-#                 observation = np.array(state.features())[-1, :, :]
-#                 observation_buffer.append(observation)
-#                 if state.is_terminal():
-#                     break
-#             observation_batch = np.stack(observation_buffer)
-#             obs_rms.update(observation_batch)
+    I think that I actually need to walk through an entire episode in order to add to the
+    replay buffer here. The reason being, if I want the GROUND TRUTH values for the
+    Q functions, we need an entire trajectory's data. That definitely changes things.
+    I can expect that this is the thing that interacts directly with the environment.
+    So we can just store a single episode on this.
 
-#     for episode in range(episodes):
-#         mdp.reset()
-#         state = deepcopy(mdp.init_state)
+    I don't know if I should use the q agent or just import the target agents directly...
+    I'll start with the real Q agent.
 
-#         observation_buffer = []
-#         intrinsic_reward_buffer = []
+    Action selection should be done exactly like we do. The difference is going to
+    be that the TARGETS are calculated using our special method.
+    The confusing thing is, that means overwriting the choosing function somehow. That's
+    pretty annoying.
 
-#         init_features = np.asarray(mdp.init_state.features())
-#         if len(init_features.shape) == 3:
-#             init_observation = init_features[-1, :, :]
-#             assert init_observation.shape == (84, 84), init_observation.shape
-#         else:
-#             init_observation = init_features
+    I actually think that extending the q agent is the right thing to do here, surprisingly.
+    That's because I would get to keep a lot of the stuff, I would mainly have to overwrite the
+    "step" function. And add in world-model training and whatnot.
 
-#         #### FROM AKHIL
-#         # init_observation = np.array(mdp.init_state.features())[-1, :, :]
-#         # assert init_observation.shape == (84, 84), init_observation.shape
-#         observation_buffer.append(init_observation)
+    """
 
-#         score = 0.
-#         while True:
-#             iteration_counter += 1
-#             action = agent.act(state.features(), train_mode=True)
-#             reward, next_state = mdp.execute_agent_action(action)
+    def __init__(self, *, world_model, q_agent, ):#*args, **kwargs):
+        nn.Module.__init__(self)
 
-#             if agent.exploration_method == "rnd":
-#                 observation = np.array(state.features())[-1, :, :]
-#                 normalized_observation = ((observation - obs_rms.mean) / np.sqrt(obs_rms.var)).clip(-5, 5)
-#                 intrinsic_reward = agent.rnd.get_single_reward(normalized_observation)
+        self.world_model = world_model
+        self.q_agent = q_agent
 
-#                 observation_buffer.append(observation)
-#                 intrinsic_reward_buffer.append(intrinsic_reward)
-#                 normalized_intrinsic_reward = (intrinsic_reward - reward_rms.mean) / np.sqrt(reward_rms.var)
 
-#                 # Logging
-#                 player_position = mdp.get_player_position()
-#                 state_ri_buffer.append((player_position, normalized_intrinsic_reward))
-#                 reward += normalized_intrinsic_reward
+    def forward(self, *args, **kwargs):
+        pass
 
-#                 if agent.tensor_log:
-#                     agent.writer.add_scalar("Normalized Ri", normalized_intrinsic_reward, iteration_counter)
+    def step(self, *args, **kwargs):
+        pass
+    
+    def _learn(self, *args, **kwargs):
+        pass
+    
+    def _update_covariance(self, *args, **kwargs):
+        pass
 
-#             agent.step(state.features(), action, reward, next_state.features(), next_state.is_terminal(), num_steps=1)
-#             agent.update_epsilon()
-#             state = next_state
-#             score += reward
-#             if agent.tensor_log:
-#                 agent.writer.add_scalar("Score", score, iteration_counter)
 
-#             game_over = mdp.game_over if hasattr(mdp, 'game_over') else False
-#             if state.is_terminal() or game_over:
-#                 break
-
-#         if agent.exploration_method == "rnd":
-#             reward_rms.update(np.stack(intrinsic_reward_buffer))
-#             obs_rms.update(np.stack(observation_buffer))
-
-#         last_10_scores.append(score)
-#         per_episode_scores.append(score)
-
-#         print('\rEpisode {}\tAverage Score: {:.2f}\tEpsilon: {:.2f}'.format(episode, np.mean(last_10_scores), agent.epsilon), end="")
-#         if episode % 100 == 0:
-#             print('\rEpisode {}\tAverage Score: {:.2f}\tEpsilon: {:.2f}'.format(episode, np.mean(last_10_scores), agent.epsilon))
-#     return per_episode_scores, state_ri_buffer
-
-# def test_forward_pass(dqn_agent, mdp):
-#     # load the weights from file
-#     mdp.reset()
-#     state = deepcopy(mdp.init_state)
-#     overall_reward = 0.
-#     mdp.render = True
-
-#     while not state.is_terminal():
-#         action = dqn_agent.act(state.features(), train_mode=False)
-#         reward, next_state = mdp.execute_agent_action(action)
-#         overall_reward += reward
-#         state = next_state
-
-#     mdp.render = False
-#     return overall_reward
-
-# def save_all_scores(experiment_name, log_dir, seed, scores):
-#     print("\rSaving training and validation scores..")
-#     training_scores_file_name = "{}_{}_training_scores.pkl".format(experiment_name, seed)
-
-#     if log_dir:
-#         training_scores_file_name = os.path.join(log_dir, training_scores_file_name)
-
-#     with open(training_scores_file_name, "wb+") as _f:
-#         pickle.dump(scores, _f)
-
-# def create_log_dir(experiment_name):
-#     path = os.path.join(os.getcwd(), experiment_name)
-#     try:
-#         os.mkdir(path)
-#     except OSError:
-#         print("Creation of the directory %s failed" % path)
-#     else:
-#         print("Successfully created the directory %s " % path)
-#     return path
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
