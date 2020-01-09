@@ -27,7 +27,8 @@ from simple_rl.agents.func_approx.sam_stuff.model import ConvQNetwork, DenseQNet
 from simple_rl.agents.func_approx.sam_stuff.epsilon_schedule import *
 from simple_rl.tasks.gym.GymMDPClass import GymMDP
 from simple_rl.tasks.lunar_lander.LunarLanderMDPClass import LunarLanderMDP
-from simple_rl.agents.func_approx.sam_stuff.RandomNetworkDistillationClass import RNDModel, RunningMeanStd
+# from simple_rl.agents.func_approx.sam_stuff.RandomNetworkDistillationClass import RNDModel, RunningMeanStd
+from simple_rl.agents.func_approx.sam_stuff.RandomNetworkDistillationClass import RunningMeanStd
 
 from simple_rl.agents.func_approx.sam_stuff.DQNAgentClass import DQNAgent
 from simple_rl.agents.func_approx.sam_stuff.DQNAgentClass import WorldModel
@@ -310,37 +311,20 @@ def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir, 
     reward_rms = RunningMeanStd()
     obs_rms = RunningMeanStd(shape=(1, 84, 84))
 
-    # Initialize the RMS normalizers
-    if agent.exploration_method == "rnd":
-        for episode in range(init_episodes):
-            observation_buffer = []
-            mdp.reset()
-            init_observation = np.array(mdp.init_state.features())[-1, :, :]
-            assert init_observation.shape == (84, 84), init_observation.shape
-            observation_buffer.append(init_observation)
-            while True:
-                action = np.random.randint(0, overall_mdp.env.action_space.n)
-                r, state = mdp.execute_agent_action(action)
-                observation = np.array(state.features())[-1, :, :]
-                observation_buffer.append(observation)
-                if state.is_terminal():
-                    break
-            observation_batch = np.stack(observation_buffer)
-            obs_rms.update(observation_batch)
-
     last_save = time.time()
 
-    evaluator = Evaluator(mdp, composer, num_runs_each=5, rollout_depth=5, logdir=logdir)
+    ## Commenting this out for now while we switch to something more reasonable.
+    # evaluator = Evaluator(mdp, composer, num_runs_each=5, rollout_depth=5, logdir=logdir)
 
     for episode in range(episodes):
 
         if episode % 10 == 0:
             print(f"Evaluating on episode {episode}")
-
-            evaluator._set_bias_variance(10)
-            evaluator.evaluate_different_models(training_steps=episode)
-            print("At some point definitely make this a CL-Arg")
-            evaluator.write_graphs()
+            print("just kidding")
+            # evaluator._set_bias_variance(10)
+            # evaluator.evaluate_different_models(training_steps=episode)
+            # print("At some point definitely make this a CL-Arg")
+            # evaluator.write_graphs()
 
         if time.time() - last_save > save_every:
             print("Saving Model")
@@ -351,7 +335,6 @@ def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir, 
         state = deepcopy(mdp.init_state)
 
         observation_buffer = []
-        intrinsic_reward_buffer = []
 
         init_features = np.asarray(mdp.init_state.features())
         if len(init_features.shape) == 3:
@@ -371,23 +354,6 @@ def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir, 
             action = agent.act(state.features(), train_mode=True)
             reward, next_state = mdp.execute_agent_action(action)
 
-            if agent.exploration_method == "rnd":
-                observation = np.array(state.features())[-1, :, :]
-                normalized_observation = ((observation - obs_rms.mean) / np.sqrt(obs_rms.var)).clip(-5, 5)
-                intrinsic_reward = agent.rnd.get_single_reward(normalized_observation)
-
-                observation_buffer.append(observation)
-                intrinsic_reward_buffer.append(intrinsic_reward)
-                normalized_intrinsic_reward = (intrinsic_reward - reward_rms.mean) / np.sqrt(reward_rms.var)
-
-                # Logging
-                player_position = mdp.get_player_position()
-                state_ri_buffer.append((player_position, normalized_intrinsic_reward))
-                reward += normalized_intrinsic_reward
-
-                if agent.tensor_log:
-                    agent.writer.add_scalar("Normalized Ri", normalized_intrinsic_reward, iteration_counter)
-
             agent.step(state.features(), action, reward, next_state.features(), next_state.is_terminal(),
                 num_steps=1, time_limit_truncated=next_state.is_time_limit_truncated())
             agent.update_epsilon()
@@ -403,10 +369,6 @@ def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir, 
             game_over = mdp.game_over if hasattr(mdp, 'game_over') else False
             if state.is_terminal() or game_over:
                 break
-
-        if agent.exploration_method == "rnd":
-            reward_rms.update(np.stack(intrinsic_reward_buffer))
-            obs_rms.update(np.stack(observation_buffer))
 
         last_10_scores.append(score)
         per_episode_scores.append(score)
