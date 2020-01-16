@@ -325,32 +325,39 @@ class Evaluator:
 #         print(f"{num_runs_each} runs:     Lam={lam}, Reward={np.mean(all_rewards)} ({np.std(all_rewards)})")
 #         print(all_rewards)
 
-def test_optimal(agent, mdp):
+def test_optimal(agent, mdp, num_episodes=1):
     # Going to return a total reward...
-    score = 0
+    scores = []
 
-    mdp.reset()
-    state = deepcopy(mdp.init_state)
+    for _ in range(num_episodes):
+        score = 0
 
-    while True:
-        action = agent.get_best_action(state.features())
-        qvalues = agent.get_qvalues(state.features())
-        # print(action)
-        # print(qvalues)
-        # print(state.features())
-        reward, next_state = mdp.execute_agent_action(action)
+        mdp.reset()
+        state = deepcopy(mdp.init_state)
 
-        score += reward
-        state = next_state
+        while True:
+            action = agent.get_best_action(state.features())
+            qvalues = agent.get_qvalues(state.features())
+            # print(action)
+            # print(qvalues)
+            # print(state.features())
+            reward, next_state = mdp.execute_agent_action(action)
 
-        game_over = mdp.game_over if hasattr(mdp, 'game_over') else False
-        if state.is_terminal() or game_over:
-            break
+            score += reward
+            state = next_state
 
+            game_over = mdp.game_over if hasattr(mdp, 'game_over') else False
+            if state.is_terminal() or game_over:
+                break
+        scores.append(score)
 
-    print(f"score is {score}")
+    average_score = np.mean(scores)
 
-def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir, world_model, composer):
+    print(f"score is {average_score}")
+
+    return average_score
+
+def train(agent, mdp, episodes, steps, init_episodes=10, evaluate_every=25, *, save_every, logdir, world_model, composer):
     model_save_loc = os.path.join(logdir, 'model.tar')
     per_episode_scores = []
     last_10_scores = deque(maxlen=100)
@@ -368,7 +375,7 @@ def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir, 
 
     for episode in range(episodes):
 
-        if episode % 25 == 0:
+        if evaluate_every > 0 and episode % evaluate_every == 0 and episode != 0:
             print(f"Evaluating on episode {episode}")
             test_optimal(composer.q_agent, mdp)
             # test_optimal(agent, mdp)
@@ -429,7 +436,66 @@ def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir, 
         print('\rEpisode {}\tAverage Score: {:.2f}\tEpsilon: {:.2f}'.format(episode, np.mean(last_10_scores), agent.epsilon), end="")
         if episode % 100 == 0:
             print('\rEpisode {}\tAverage Score: {:.2f}\tEpsilon: {:.2f}'.format(episode, np.mean(last_10_scores), agent.epsilon))
+
     return per_episode_scores, state_ri_buffer
+
+
+def bayes_functional(*, mdp, args):
+    """
+    This will like do the setup and stuff, and then return a singular number at the end.
+    We would like this to return a function that has all the constants filled in.
+    Because bayes_opt doesn't seem to have a good way of passing the same thing to
+    everyone...
+    """
+    def functional(lr_exp, tau_exp):
+        print(f"Running for {lr_exp} {tau_exp}")
+        state_dim = overall_mdp.env.observation_space.shape if args.pixel_observation else overall_mdp.env.observation_space.shape[0]
+        action_dim = len(overall_mdp.actions)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # device = torch.device("cpu")
+
+        # We're going to pass in something like lr=4, and it'll translate it to 10^-4
+        # And we'll bound at 0 and 5 or something.
+
+        lr = 10**-lr_exp
+        tau = 10**-tau_exp
+
+
+        ddqn_agent = DQNAgent(state_size=state_dim, action_size=action_dim,
+                            seed=args.seed, device=device,
+                            name="GlobalDDQN", lr=lr, tau=tau, tensor_log=args.tensor_log, use_double_dqn=True,
+                            exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
+                            evaluation_epsilon=args.eval_eps,
+                            epsilon_linear_decay=args.epsilon_linear_decay,
+                            use_softmax_target=args.use_softmax_target)
+
+        world_model = WorldModel(state_size=state_dim, action_size=action_dim,
+                            seed=args.seed, device=device,
+                            name="WorldModel", lr=lr, tensor_log=args.tensor_log,# use_double_dqn=True,
+                            writer = ddqn_agent.writer, # Because I'm concerned it's over-writing...
+                            #exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
+                            #evaluation_epsilon=args.eval_eps,
+                            #epsilon_linear_decay=args.epsilon_linear_decay
+                            )
+
+
+        composer = Composer(
+            q_agent=ddqn_agent,
+            world_model=world_model,
+            action_size=action_dim,
+            device=device)
+
+        train(
+            ddqn_agent, overall_mdp, args.episodes, args.steps,
+            save_every=args.save_every, logdir=logdir, world_model=world_model,
+            composer=composer,
+            evaluate_every=0)
+
+        print("Boom, training complete. Now testing optimal!")
+        val = test_optimal(ddqn_agent, mdp, num_episodes=25) 
+        return val
+
+    return functional
 
 
 if __name__ == '__main__':
@@ -449,6 +515,7 @@ if __name__ == '__main__':
     parser.add_argument("--epsilon_linear_decay", type=int, help="'train' or 'view'", default=100000)
     parser.add_argument("--use_softmax_target", default=False, action='store_true', help='When calculating backups, do you use the max or the softmax?')
     parser.add_argument("--learning_rate", default=1e-3, type=float, help='What do you think!')
+    parser.add_argument("--tau", default=1e-3, type=float, help='Target copying rate')
     # parser.add_argument("--use_world_model", default=False, action='store_true', help="Include this option if you want to see how a world model trains.")
     args = parser.parse_args()
 
@@ -476,7 +543,9 @@ if __name__ == '__main__':
 
     ddqn_agent = DQNAgent(state_size=state_dim, action_size=action_dim,
                         seed=args.seed, device=device,
-                        name="GlobalDDQN", lr=args.learning_rate, tensor_log=args.tensor_log, use_double_dqn=True,
+                        name="GlobalDDQN",
+                        lr=args.learning_rate, tau=args.tau,
+                        tensor_log=args.tensor_log, use_double_dqn=True,
                         exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
                         evaluation_epsilon=args.eval_eps,
                         epsilon_linear_decay=args.epsilon_linear_decay,
@@ -513,5 +582,25 @@ if __name__ == '__main__':
         ddqn_agent.load_state_dict(torch.load(model_save_loc))
         test_render(ddqn_agent, overall_mdp)
         pass
+    elif args.mode == 'hyper':
+        from bayes_opt import BayesianOptimization
+        f = bayes_functional(mdp=overall_mdp, args=args)
+        pbounds = {'lr_exp': (0, 5), 'tau_exp': (0,5)}
+        optimizer = BayesianOptimization(
+            f=f,
+            pbounds=pbounds,
+            random_state=1,
+        )
+
+        optimizer.maximize(
+            init_points=2,
+            n_iter=10,
+        )
+        print(optimizer.max)
+        for i, res in enumerate(optimizer.res):
+            print("Iteration {}: \n\t{}".format(i, res))
+        import pdb; pdb.set_trace()
+        print('bingester')
+
     else:
         raise Exception("HEELLOOO")

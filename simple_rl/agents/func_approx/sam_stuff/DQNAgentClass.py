@@ -238,7 +238,7 @@ class DQNAgent(Agent, nn.Module):
 
     def __init__(self, state_size, action_size,
                  seed, device, name="DQN-Agent",
-                 eps_start=1., tensor_log=False, lr=LR, use_double_dqn=True, gamma=GAMMA, loss_function="huber",
+                 eps_start=1., tensor_log=False, lr=LR, tau=TAU, use_double_dqn=True, gamma=GAMMA, loss_function="huber",
                  gradient_clip=None, evaluation_epsilon=0.05, exploration_method="eps-greedy",
                  pixel_observation=False, writer=None,
                  use_softmax_target=False,
@@ -249,6 +249,7 @@ class DQNAgent(Agent, nn.Module):
         self.state_size = state_size
         self.action_size = action_size
         self.learning_rate = lr
+        self.tau = tau
         self.use_ddqn = use_double_dqn
         self.gamma = gamma
         self.loss_function = loss_function
@@ -355,6 +356,9 @@ class DQNAgent(Agent, nn.Module):
         assert len(state.shape) == 1
 
         q_values = self.get_qvalues(state, network_name="policy")
+        # to_return = torch.argmax(q_values).item()
+        # print(f"{to_return}   {q_values}")
+        # return to_return
         return torch.argmax(q_values).item()
 
     def get_value(self, state):
@@ -578,7 +582,7 @@ class DQNAgent(Agent, nn.Module):
             self.writer.add_scalar("DQN-GradientNorm", compute_gradient_norm(self.policy_network), self.num_updates)
 
         # ------------------- update target network ------------------- #
-        self.soft_update(self.policy_network, self.target_network, TAU)
+        self.soft_update(self.policy_network, self.target_network, self.tau)
 
     def soft_update(self, local_model, target_model, tau):
         """
@@ -593,10 +597,11 @@ class DQNAgent(Agent, nn.Module):
     def update_epsilon(self):
         self.num_epsilon_updates += 1
         self.epsilon = self.epsilon_schedule.update_epsilon(self.epsilon, self.num_epsilon_updates)
-        if random.random() < 0.01:
-            # This is certainly a silly way of doing this...
-            print("We're going to make temperature and epsilon track")
-        self.temperature = self.epsilon
+
+        # if random.random() < 0.01:
+        #     # This is certainly a silly way of doing this...
+        #     print("We're going to make temperature and epsilon track")
+        # self.temperature = self.epsilon
 
         # Log epsilon decay
         if self.tensor_log:
