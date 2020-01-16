@@ -238,7 +238,8 @@ class DQNAgent(Agent, nn.Module):
 
     def __init__(self, state_size, action_size,
                  seed, device, name="DQN-Agent",
-                 eps_start=1., tensor_log=False, lr=LR, tau=TAU, use_double_dqn=True, gamma=GAMMA, loss_function="huber",
+                 eps_start=1., tensor_log=False, lr=LR, tau=TAU, use_double_dqn=True, gamma=GAMMA,
+                 loss_function="huber",
                  gradient_clip=None, evaluation_epsilon=0.05, exploration_method="eps-greedy",
                  pixel_observation=False, writer=None,
                  use_softmax_target=False,
@@ -501,8 +502,8 @@ class DQNAgent(Agent, nn.Module):
                 if self.tensor_log:
                     self.writer.add_scalar("NumPositiveTransitions", self.replay_buffer.positive_transitions[-1], self.num_updates)
                 self.num_updates += 1
-                if self.num_updates % 100 == 0:
-                    print(f"\nNumber of updates: {self.num_updates}")
+                # if self.num_updates % 1000 == 0:
+                #     print(f"\nNumber of updates: {self.num_updates}")
 
     def _get_state_values(self, states):
         """
@@ -517,6 +518,8 @@ class DQNAgent(Agent, nn.Module):
             with torch.no_grad():
                 if self.use_softmax_target:
                     state_values = self.get_softmax_values(states)
+                    # This used to be very bad in that it was the wrong dimensionality.
+                    state_values = state_values.unsqueeze(1)
                 else:
                     selected_actions = self.policy_network(states).argmax(dim=1).unsqueeze(1)
                     state_values = self.target_network(states).detach().gather(1, selected_actions)
@@ -556,6 +559,8 @@ class DQNAgent(Agent, nn.Module):
 
         # Compute loss
         if self.loss_function == "huber":
+            # print("Getting an error here?")
+            # import pdb; pdb.set_trace()
             loss = F.smooth_l1_loss(Q_expected, Q_targets)
         elif self.loss_function == "mse":
             loss = F.mse_loss(Q_expected, Q_targets)
@@ -610,6 +615,10 @@ class DQNAgent(Agent, nn.Module):
 
 class OnlineComposer(DQNAgent):
     """
+
+    I can definitely do the covariance thing incrementally. The only thing is, I need
+    to use the running mean, not the sample-mean.
+
     This acts surprisingly similar to the Composer in ModelQNetworkComposer.py
     Except that it acts online, and uses the composer to provide better updates,
     as opposed to better evaluation. I guess it could do both....
@@ -659,7 +668,11 @@ class OnlineComposer(DQNAgent):
     so that we value previous ones less. And use a buffer.
     """
 
-    def __init__(self, *args, world_model=None, num_rollouts=5, **kwargs):#*args, **kwargs):
+    def __init__(self, *args, world_model=None, num_rollouts=5, mixing_speed=0.95, **kwargs):
+        """
+        Okay, how should we be initializing? We need a starting bias and covariance.
+        We also need a mixing speed, and a way to do the averaging.
+        """
         super(OnlineComposer, self).__init__(*args, **kwargs)
 
         self.world_model = world_model
@@ -670,9 +683,11 @@ class OnlineComposer(DQNAgent):
         self.episode_experience = namedtuple("Experience", field_names=["state", "action", "reward", "next_state", "done", "num_steps", "time_limit_truncated"])
 
         self.biases = np.zeros((num_rollouts,))
+        self.covariances = np.eye(num_rollouts, dtype=np.float32)
+
         self.weights = np.ones((num_rollouts)) / num_rollouts # Let's start with just the Q
 
-        self.mixing_speed = 0.95 # Something like a half life of 14....
+        self.mixing_speed = mixing_speed #0.95 # Something like a half life of 14....
 
 
     # def forward(self, *args, **kwargs):
@@ -685,44 +700,62 @@ class OnlineComposer(DQNAgent):
             print("Updating weight!")
             self._update_weights(self.episode_buffer)
             self.episode_buffer = []
+            print(self.weights)
         self.world_model.step(state, action, reward, next_state, done, num_steps=1, time_limit_truncated=False)
         # This step calls "learn" sometimes. That's good, we need to overwrite that though....
         super(OnlineComposer, self).step(state, action, reward, next_state, done, num_steps=num_steps, time_limit_truncated=time_limit_truncated)
         pass
     
-    def _learn(self, experiences):
-        print(f"Learning using weights {self.weights} and biases {self.biases}")
-        pass
+    # def _learn(self, experiences):
+    #     print(f"Learning using weights {self.weights} and biases {self.biases}")
+    #     pass
 
-    def _get_weighted_state_values(self, states):
-        # First, you get the rollout values.
+    def _get_state_values(self, states):
+        """
+        This is actually all I need to update if I
+        want to replace the existing update with this.
+
+        Really make sure that it's 32 x 1 or whatever.
+
+        NOTE: This returns a numpy array, but that should maybe be alright given how it's used.
+        """
+        print('bingster!!!!')
+        import pdb; pdb.set_trace()
         all_estimates = self._get_values_for_rollouts(states)
         debiased_estimates = all_estimates - self.biases # This may need some broadcast support
         weighted_estimates = all_estimates @ self.weights.T
-        weighted_estimates = np.squeeze(weighted_estimates, axis=1)
+        # weighted_estimates = np.squeeze(weighted_estimates, axis=1)
         return weighted_estimates
 
-    def _create_bias_covariance_from_data(self, experiences, gamma=0.99):
-        """
-        The big boy!!!
-        """
+    # def _get_weighted_state_values(self, states):
+    #     # First, you get the rollout values.
+    #     all_estimates = self._get_values_for_rollouts(states)
+    #     debiased_estimates = all_estimates - self.biases # This may need some broadcast support
+    #     weighted_estimates = all_estimates @ self.weights.T
+    #     # weighted_estimates = np.squeeze(weighted_estimates, axis=1)
+    #     return weighted_estimates
 
-        num_rollouts = self.num_rollouts
+    # def _create_bias_covariance_from_data(self, experiences, gamma=0.99):
+    #     """
+    #     The big boy!!!
+    #     """
 
-        states = [exp.state for exp in experiences]
-        actions = [exp.action for exp in experiences]
+    #     num_rollouts = self.num_rollouts
 
-        true_values = self._get_true_state_values(experiences, gamma=gamma)
-        all_estimates = self._get_values_for_rollouts(states)
-        # all_estimates = self.create_rollout_matrix_from_data(
-        #     states, actions, num_rollouts, true_values, gamma=gamma)
+    #     states = [exp.state for exp in experiences]
+    #     actions = [exp.action for exp in experiences]
 
-        # import ipdb; ipdb.set_trace()
+    #     true_values = self._get_true_state_values(experiences, gamma=gamma)
+    #     all_estimates = self._get_values_for_rollouts(states)
+    #     # all_estimates = self.create_rollout_matrix_from_data(
+    #     #     states, actions, num_rollouts, true_values, gamma=gamma)
 
-        bias = self._calculate_bias_for_rollouts(all_estimates, true_values)
-        covariance = self._calculate_covariance_for_rollouts(all_estimates, true_values)
+    #     # import ipdb; ipdb.set_trace()
 
-        return bias, covariance
+    #     bias = self._calculate_bias_for_rollouts(all_estimates, true_values)
+    #     covariance = self._calculate_covariance_for_rollouts(all_estimates, true_values)
+
+    #     return bias, covariance
 
     def _get_true_state_values(self, episode, gamma):
         """
@@ -832,20 +865,40 @@ class OnlineComposer(DQNAgent):
 
     def _calculate_covariance_for_rollouts(self, all_estimates, true_values):
         """
-        Alright, there's actually no need to debias first... I can just skip that part.
+        We're going to debias using the running average, and then calculate it ourself.
+
+        NOTE: The estimates are not debiased yet.
         """
+        cprint("Not really sure about this ATM","red")
+
+        num_samples = len(all_estimates)
+
+        # true values is the real Q value given the data. Should be unbiased.
         true_values = np.asarray(true_values)
         true_values = true_values.reshape(-1, 1) # So you can subtract it...
-        # debiased_estimates = np.asarray(debiased_estimates)
-        # difference_matrix = debiased_estimates - true_values # The mean should be very close to zero...
-        # assert np.allclose(difference_matrix.mean(axis=0), 0) # Make sure we're using debiased..
-        difference_matrix = all_estimates - true_values
+        debiased_estimates = all_estimates - self.biases
 
-        covariance = np.cov(difference_matrix.T) # Not sure why we need the transpose, but we do.
+        print("get the shapes you dignus")
+        import pdb; pdb.set_trace()
+
+        covariance = debiased_estimates.T @ debiased_estimates
+        covariance = covariance / num_samples
         print(f"Shape of covariance is {covariance.shape}")
 
         assert covariance.shape == (len(all_estimates[0]), len(all_estimates[0]))
         return covariance
+
+
+        # debiased_estimates = np.asarray(debiased_estimates)
+        # difference_matrix = debiased_estimates - true_values # The mean should be very close to zero...
+        # assert np.allclose(difference_matrix.mean(axis=0), 0) # Make sure we're using debiased..
+        # difference_matrix = all_estimates - true_values
+
+        # covariance = np.cov(difference_matrix.T) # Not sure why we need the transpose, but we do.
+        # print(f"Shape of covariance is {covariance.shape}")
+
+        # assert covariance.shape == (len(all_estimates[0]), len(all_estimates[0]))
+        # return covariance
         # independent_variance = np.var(difference_matrix, axis=0)
 
         # print(f"shape of independent_variance is {independent_variance.shape}")
@@ -865,17 +918,48 @@ class OnlineComposer(DQNAgent):
         return w_prime
 
     def _update_weights(self, experiences):
-        """Updates weights and bias"""
+        """Updates bias, weight, and covariance"""
+
+        # This should use global bias.
+        cprint("Currently this is wrong, because it doesn't do the bias correctly.", "red")
         gamma = self.gamma
 
-        bias, covariance = self._create_bias_covariance_from_data(experiences, gamma=gamma)
-        weights = self._calculate_weight_from_covariance(covariance)
 
-        assert np.all(np.greater_equal(weights, 0.0))
+        num_rollouts = self.num_rollouts
+
+        states = [exp.state for exp in experiences]
+        actions = [exp.action for exp in experiences]
+
+        true_values = self._get_true_state_values(experiences, gamma=gamma)
+        all_estimates = self._get_values_for_rollouts(states)
+        # all_estimates = self.create_rollout_matrix_from_data(
+        #     states, actions, num_rollouts, true_values, gamma=gamma)
+
+        # import ipdb; ipdb.set_trace()
+
+        bias_est = self._calculate_bias_for_rollouts(all_estimates, true_values)
+        self.biases = self.mixing_speed * self.biases + (1 - self.mixing_speed) * bias_est
+
+        covariance_est = self._calculate_covariance_for_rollouts(all_estimates, true_values)
+        self.covariances = self.mixing_speed * self.covariances + (1 - self.mixing_speed) * covariance_est
+
+        self.weights = self._calculate_weight_from_covariance(self.covariances)
 
 
-        self.biases = ((1 - self.mixing_speed) * self.biases) + self.mixing_speed * bias
-        self.weights = ((1 - self.mixing_speed) * self.weights) + self.mixing_speed * weights
+        # debiased_estimates = all_estimates - self.biases
+
+
+
+
+
+        # bias, covariance = self._create_bias_covariance_from_data(experiences, gamma=gamma)
+        # weights = self._calculate_weight_from_covariance(covariance)
+
+        # assert np.all(np.greater_equal(weights, 0.0))
+
+
+        # self.biases = ((1 - self.mixing_speed) * self.biases) + self.mixing_speed * bias
+        # self.weights = ((1 - self.mixing_speed) * self.weights) + self.mixing_speed * weights
  
 
 

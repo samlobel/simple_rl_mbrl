@@ -32,6 +32,7 @@ from simple_rl.agents.func_approx.sam_stuff.RandomNetworkDistillationClass impor
 
 from simple_rl.agents.func_approx.sam_stuff.DQNAgentClass import DQNAgent
 from simple_rl.agents.func_approx.sam_stuff.DQNAgentClass import WorldModel
+from simple_rl.agents.func_approx.sam_stuff.DQNAgentClass import OnlineComposer
 from simple_rl.agents.func_approx.sam_stuff.ModelQNetworkComposer import Composer
 
 
@@ -85,7 +86,7 @@ def save_all_scores(experiment_name, log_dir, seed, scores):
         pickle.dump(scores, _f)
 
 def create_log_dir(experiment_name):
-    path = os.path.join(os.getcwd(), experiment_name)
+    path = os.path.join(os.getcwd(), "logs", experiment_name)
     try:
         os.mkdir(path)
     except OSError:
@@ -460,6 +461,8 @@ def bayes_functional(*, mdp, args):
         lr = 10**-lr_exp
         tau = 10**-tau_exp
 
+        print(f"Running for lr_exp={lr_exp} tau_exp={tau_exp}")
+        print(f"AKA lr={lr} tau={tau}")
 
         ddqn_agent = DQNAgent(state_size=state_dim, action_size=action_dim,
                             seed=args.seed, device=device,
@@ -516,6 +519,7 @@ if __name__ == '__main__':
     parser.add_argument("--use_softmax_target", default=False, action='store_true', help='When calculating backups, do you use the max or the softmax?')
     parser.add_argument("--learning_rate", default=1e-3, type=float, help='What do you think!')
     parser.add_argument("--tau", default=1e-3, type=float, help='Target copying rate')
+    parser.add_argument("--evaluate_every", default=25, type=int, help='Expensive evaluation step for tracking')
     # parser.add_argument("--use_world_model", default=False, action='store_true', help="Include this option if you want to see how a world model trains.")
     args = parser.parse_args()
 
@@ -574,7 +578,7 @@ if __name__ == '__main__':
     if args.mode == 'train':
         ddqn_episode_scores, s_ri_buffer = train(
             ddqn_agent, overall_mdp, args.episodes, args.steps, save_every=args.save_every, logdir=logdir, world_model=world_model,
-            composer=composer)
+            composer=composer, evaluate_every=args.evaluate_every)
         save_all_scores(args.experiment_name, logdir, args.seed, ddqn_episode_scores)
     elif args.mode == 'view':
         print('waow')
@@ -585,7 +589,7 @@ if __name__ == '__main__':
     elif args.mode == 'hyper':
         from bayes_opt import BayesianOptimization
         f = bayes_functional(mdp=overall_mdp, args=args)
-        pbounds = {'lr_exp': (0, 5), 'tau_exp': (0,5)}
+        pbounds = {'lr_exp': (1, 5), 'tau_exp': (1,5)}
         optimizer = BayesianOptimization(
             f=f,
             pbounds=pbounds,
@@ -593,7 +597,7 @@ if __name__ == '__main__':
         )
 
         optimizer.maximize(
-            init_points=2,
+            init_points=5,
             n_iter=10,
         )
         print(optimizer.max)
