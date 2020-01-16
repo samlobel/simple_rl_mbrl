@@ -101,7 +101,8 @@ def test_render(agent, mdp):
         mdp.reset()
         state = mdp.init_state
         while True:
-            action = agent.act(state.features(), train_mode=False)
+            # action = agent.act(state.features(), train_mode=False)
+            action = agent.get_best_action(state.features())
             reward, next_state = mdp.execute_agent_action(action)
             state = next_state
 
@@ -209,10 +210,21 @@ class Evaluator:
 
     def _set_bias_variance(self, num_runs_to_collect_over):
         data = collect_data_for_bias_variance_calculation(self.mdp, self.composer.q_agent, num_runs_to_collect_over)
-        bias, variance = self.composer.create_bias_variance_from_data(data, 5)
+        # bias, variance = self.composer.create_bias_variance_from_data(data, self.rollout_depth)
+        bias, variance, covariance = self.composer.create_bias_variance_covariance_from_data(data, self.rollout_depth)
+
+        # print("This is about to be mega self-defeating...")
+        # self._bias = np.zeros((self.rollout_depth,), dtype=np.float32)
+        # self._variance = np.ones((self.rollout_depth,), dtype=np.float32)
+        # self._variance[0] -= 0.999
+        # self._variance *= 1000
+        # print("self, defeated")
+
         self._bias = bias
         self._variance = variance
+        self._covariance = covariance
         print(f"Bias: {bias}\nVariance: {variance}")
+        print(f"Covariance: {covariance}")
 
     def evaluate_different_models(self, *, training_steps):
         """
@@ -223,16 +235,29 @@ class Evaluator:
         assert self._variance is not None
 
         lambdas_to_test = self.lambdas_to_test
+        # print(self.lambdas_to_test)
         mdp = self.mdp
         composer = self.composer
         num_runs_each = self.num_runs_each
         rollout_depth = self.rollout_depth
 
-        funcs = [(lam, lambda s: composer.get_best_action_td_lambda(s, rollout_depth, gamma=0.99, lam=lam))
+        # lambdas_to_test.reverse()
+        # funcs = []
+
+        print("TODO: I know that it's a scoping and reference problem. Maybe use partials?")
+
+        # There's a really annoying referencing problem here. Let's see how it goes.
+        funcs = [(lam, (lambda l: lambda s: composer.get_best_action_td_lambda(s, rollout_depth, gamma=0.99, lam=l))(lam))
                 for lam in lambdas_to_test]
+
+        # print(funcs)
 
         funcs.append(("OptimalVariance",
             lambda s: composer.get_best_action_for_bias_variance(s, rollout_depth, self._bias, self._variance, gamma=0.99)))
+
+        funcs.append(("OptimalCovariance",
+            lambda s: composer.get_best_action_for_bias_covariance(s, rollout_depth, self._bias, self._covariance, gamma=0.99)))
+
 
         # for lam in lambdas_to_test:
         for key, func in funcs:
@@ -246,6 +271,7 @@ class Evaluator:
                     # state = torch.from_numpy(state).float().unsqueeze(0).to("cuda")
                     # action = composer.get_best_action_td_lambda(state, rollout_depth, gamma=0.99, lam=lam)
                     action = func(state)
+                    # print(action)
                     reward, next_state = mdp.execute_agent_action(action)
                     reward_so_far += reward
                     game_over = mdp.game_over if hasattr(mdp, 'game_over') else False
@@ -270,35 +296,59 @@ class Evaluator:
         plt.clf()
 
 
-def evaluate_different_models(mdp, composer, num_runs_each=1, training_steps=None):
-    # Somehow I want to also graph this... How should I do that?
-    # I could make this a class, and keep track of past things. But that does
-    # seem heavy-handed. How about I start by just printing them out...
-    lambdas_to_test = [0.0, 0.5, 1.0]
-    rollout_depth = 5
+# def evaluate_different_models(mdp, composer, num_runs_each=1, training_steps=None):
+#     # Somehow I want to also graph this... How should I do that?
+#     # I could make this a class, and keep track of past things. But that does
+#     # seem heavy-handed. How about I start by just printing them out...
+#     lambdas_to_test = [0.0, 0.5, 1.0]
+#     rollout_depth = 5
 
-    for lam in lambdas_to_test:
-        all_rewards = []
-        for _ in range(num_runs_each):
-            mdp.reset()
-            state = deepcopy(mdp.init_state)
-            state = np.asarray(state.features())
-            reward_so_far = 0.0
-            while True:
-                # state = torch.from_numpy(state).float().unsqueeze(0).to("cuda")
-                action = composer.get_best_action_td_lambda(state, rollout_depth, gamma=0.99, lam=lam)
-                reward, next_state = mdp.execute_agent_action(action)
-                reward_so_far += reward
-                game_over = mdp.game_over if hasattr(mdp, 'game_over') else False
-                if next_state.is_terminal() or game_over:
-                    break
+#     for lam in lambdas_to_test:
+#         all_rewards = []
+#         for _ in range(num_runs_each):
+#             mdp.reset()
+#             state = deepcopy(mdp.init_state)
+#             state = np.asarray(state.features())
+#             reward_so_far = 0.0
+#             while True:
+#                 # state = torch.from_numpy(state).float().unsqueeze(0).to("cuda")
+#                 action = composer.get_best_action_td_lambda(state, rollout_depth, gamma=0.99, lam=lam)
+#                 reward, next_state = mdp.execute_agent_action(action)
+#                 reward_so_far += reward
+#                 game_over = mdp.game_over if hasattr(mdp, 'game_over') else False
+#                 if next_state.is_terminal() or game_over:
+#                     break
 
-                state = np.asarray(next_state.features())
-            all_rewards.append(reward_so_far)
-        all_rewards = np.asarray(all_rewards)
-        print(f"{num_runs_each} runs:     Lam={lam}, Reward={np.mean(all_rewards)} ({np.std(all_rewards)})")
-        print(all_rewards)
+#                 state = np.asarray(next_state.features())
+#             all_rewards.append(reward_so_far)
+#         all_rewards = np.asarray(all_rewards)
+#         print(f"{num_runs_each} runs:     Lam={lam}, Reward={np.mean(all_rewards)} ({np.std(all_rewards)})")
+#         print(all_rewards)
 
+def test_optimal(agent, mdp):
+    # Going to return a total reward...
+    score = 0
+
+    mdp.reset()
+    state = deepcopy(mdp.init_state)
+
+    while True:
+        action = agent.get_best_action(state.features())
+        qvalues = agent.get_qvalues(state.features())
+        # print(action)
+        # print(qvalues)
+        # print(state.features())
+        reward, next_state = mdp.execute_agent_action(action)
+
+        score += reward
+        state = next_state
+
+        game_over = mdp.game_over if hasattr(mdp, 'game_over') else False
+        if state.is_terminal() or game_over:
+            break
+
+
+    print(f"score is {score}")
 
 def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir, world_model, composer):
     model_save_loc = os.path.join(logdir, 'model.tar')
@@ -314,17 +364,20 @@ def train(agent, mdp, episodes, steps, init_episodes=10, *, save_every, logdir, 
     last_save = time.time()
 
     ## Commenting this out for now while we switch to something more reasonable.
-    # evaluator = Evaluator(mdp, composer, num_runs_each=5, rollout_depth=5, logdir=logdir)
+    evaluator = Evaluator(mdp, composer, num_runs_each=5, rollout_depth=5, logdir=logdir)
 
     for episode in range(episodes):
 
-        if episode % 10 == 0:
+        if episode % 25 == 0:
             print(f"Evaluating on episode {episode}")
-            print("just kidding")
+            test_optimal(composer.q_agent, mdp)
+            # test_optimal(agent, mdp)
+            # print("just kidding")
             # evaluator._set_bias_variance(10)
-            # evaluator.evaluate_different_models(training_steps=episode)
-            # print("At some point definitely make this a CL-Arg")
-            # evaluator.write_graphs()
+            evaluator._set_bias_variance(10)
+            evaluator.evaluate_different_models(training_steps=episode)
+            print("At some point definitely make this a CL-Arg")
+            evaluator.write_graphs()
 
         if time.time() - last_save > save_every:
             print("Saving Model")
@@ -395,12 +448,13 @@ if __name__ == '__main__':
     parser.add_argument("--mode", type=str, help="'train' or 'view'", default='train')
     parser.add_argument("--epsilon_linear_decay", type=int, help="'train' or 'view'", default=100000)
     parser.add_argument("--use_softmax_target", default=False, action='store_true', help='When calculating backups, do you use the max or the softmax?')
+    parser.add_argument("--learning_rate", default=1e-3, type=float, help='What do you think!')
     # parser.add_argument("--use_world_model", default=False, action='store_true', help="Include this option if you want to see how a world model trains.")
     args = parser.parse_args()
 
     logdir = create_log_dir(args.experiment_name)
     model_save_loc = os.path.join(logdir, 'model.tar')
-    learning_rate = 1e-3 # 0.00025 for pong
+    # learning_rate = 1e-3 # 0.00025 for pong
 
     overall_mdp = GymMDP(env_name=args.env, pixel_observation=args.pixel_observation, render=args.render,
                          clip_rewards=False, term_func=None, seed=args.seed)
@@ -422,7 +476,7 @@ if __name__ == '__main__':
 
     ddqn_agent = DQNAgent(state_size=state_dim, action_size=action_dim,
                         seed=args.seed, device=device,
-                        name="GlobalDDQN", lr=learning_rate, tensor_log=args.tensor_log, use_double_dqn=True,
+                        name="GlobalDDQN", lr=args.learning_rate, tensor_log=args.tensor_log, use_double_dqn=True,
                         exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
                         evaluation_epsilon=args.eval_eps,
                         epsilon_linear_decay=args.epsilon_linear_decay,
@@ -430,7 +484,8 @@ if __name__ == '__main__':
 
     world_model = WorldModel(state_size=state_dim, action_size=action_dim,
                         seed=args.seed, device=device,
-                        name="WorldModel", lr=learning_rate, tensor_log=args.tensor_log,# use_double_dqn=True,
+                        name="WorldModel", lr=args.learning_rate, tensor_log=args.tensor_log,# use_double_dqn=True,
+                        writer = ddqn_agent.writer, # Because I'm concerned it's over-writing...
                         #exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
                         #evaluation_epsilon=args.eval_eps,
                         #epsilon_linear_decay=args.epsilon_linear_decay
@@ -443,8 +498,8 @@ if __name__ == '__main__':
         action_size=action_dim,
         device=device)
 
-    data = collect_data_for_bias_variance_calculation(overall_mdp, ddqn_agent, 1)
-    bias, variance = composer.create_bias_variance_from_data(data, 5)
+    # data = collect_data_for_bias_variance_calculation(overall_mdp, ddqn_agent, 1)
+    # bias, variance = composer.create_bias_variance_from_data(data, 5)
 
 
     if args.mode == 'train':

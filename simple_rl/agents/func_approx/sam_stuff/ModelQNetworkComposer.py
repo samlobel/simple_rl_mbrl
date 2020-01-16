@@ -75,7 +75,7 @@ class Composer:
         values.reverse() # In place, always confusing
         return values
 
-    def create_bias_variance_from_data(self, experiences, num_rollouts, gamma=0.99):
+    def create_bias_variance_covariance_from_data(self, experiences, num_rollouts, gamma=0.99):
         """
         The big boy!!!
         """
@@ -91,11 +91,30 @@ class Composer:
         bias = self.calculate_bias_for_rollouts(all_estimates, true_values)
         variance = self.calculate_variance_for_rollouts(all_estimates, true_values)
 
-        return bias, variance
+        covariance = self.calculate_covariance_for_rollouts(all_estimates, true_values)
+
+        return bias, variance, covariance
         # unbiased_estimates = all_estimates - 
         
 
-        pass
+        # pass
+
+    def calculate_covariance_for_rollouts(self, all_estimates, true_values):
+        num_rollouts = len(all_estimates[0])
+
+        true_values = np.asarray(true_values)
+        true_values = true_values.reshape(-1, 1) # So you can subtract it...
+        # debiased_estimates = np.asarray(debiased_estimates)
+        # difference_matrix = debiased_estimates - true_values # The mean should be very close to zero...
+        # assert np.allclose(difference_matrix.mean(axis=0), 0) # Make sure we're using debiased..
+        difference_matrix = all_estimates - true_values
+
+        covariance = np.cov(difference_matrix.T)
+        assert covariance.shape == (num_rollouts, num_rollouts), f"{covariance.shape}, {num_rollouts}"
+
+        return covariance
+        # print(f"shape of independent_variance is {independent_variance.shape}")
+        # return independent_variance
 
     def create_rollout_matrix_from_data(self, states, actions, num_rollouts, true_values, gamma=0.99):
         """
@@ -147,8 +166,8 @@ class Composer:
 
 
     def get_bias_variance_scaled_estimate(self, state, first_action, num_rollouts, bias, variance, gamma=0.99):
-        assert len(bias) == len(variance) == num_rollouts # I may relax this to greater, but whatever.
-        assert all(v > 0 for v in variance)
+        assert len(bias) == len(variance) == num_rollouts, f"{len(bias)} {len(variance)} {num_rollouts}" # I may relax this to greater, but whatever.
+        assert all(v >= 0 for v in variance), variance
         rollout_values = self.get_value_for_rollouts(state, first_action, num_rollouts, gamma=gamma)
         debiased_rollout_values = rollout_values - bias
         inverse_variances = [1 / v for v in variance]
@@ -160,13 +179,45 @@ class Composer:
         # is just going to be adding a constant. But at least it was necessary for calculating
         # variance. NOPE!!!!!
         # Now that we have debiased values, we can combine them with the covariance thing!
-        
+
+    def get_bias_covariance_scaled_estimate(self, state, first_action, num_rollouts, bias, covariance, gamma=0.99):
+        assert len(bias) == len(covariance) == len(covariance[0]) == num_rollouts, f"{len(bias)} {len(covariance)} {num_rollouts}" # I may relax this to greater, but whatever.
+        # assert all(v >= 0 for v in covariance.flatten()), covariance
+        rollout_values = self.get_value_for_rollouts(state, first_action, num_rollouts, gamma=gamma)
+        debiased_rollout_values = rollout_values - bias
+
+        cov_inv = np.linalg.inv(covariance)
+        ones = np.ones((num_rollouts, 1), np.float32)
+        weights = (ones.T @ cov_inv) / (ones.T @ cov_inv @ ones)
+        weights = weights.flatten()
+        assert np.isclose(np.sum(weights), 1.0, atol=1e-6)
+
+        # import pdb; pdb.set_trace()
+
+        # print(f"Weights: {weights}")
+
+        corrected_estimates = sum(w*rv for w, rv in zip(weights, debiased_rollout_values))
+        # print(corrected_estimates)
+        return corrected_estimates
+
+        # inverse_variances = [1 / v for v in variance]
+        # corrected_estimate = sum(iv*rv for iv, rv in zip(inverse_variances, debiased_rollout_values)) / sum(inverse_variances)
+        # return corrected_estimate
+
+
 
     def get_best_action_for_bias_variance(self, state, num_rollouts, bias, variance, gamma=0.99):
         def functional(first_action):
             return self.get_bias_variance_scaled_estimate(state, first_action, num_rollouts, bias, variance, gamma=gamma)
 
         return self._get_best_action_from_functional(functional)
+
+    def get_best_action_for_bias_covariance(self, state, num_rollouts, bias, variance, gamma=0.99):
+        def functional(first_action):
+            return self.get_bias_covariance_scaled_estimate(state, first_action, num_rollouts, bias, variance, gamma=gamma)
+
+        return self._get_best_action_from_functional(functional)
+    
 
     def _get_best_action_from_functional(self, functional):
         """
@@ -179,16 +230,21 @@ class Composer:
 
     def get_best_action_td_lambda(self, state, num_rollouts, gamma=0.99, lam=0.5):
         """The functional thing makes it much more readable and reusable IMO"""
+        # print(lam)
         def functional(action):
+            # print(lam)
             return self.get_td_lambda_estimates(state, action, num_rollouts, gamma=gamma, lam=lam)
 
         return self._get_best_action_from_functional(functional)      
 
     def get_td_lambda_estimates(self, state, first_action, num_rollouts, gamma=0.99, lam=0.5):
+        # print(lam)
         rollout_values = self.get_value_for_rollouts(state, first_action, num_rollouts, gamma=gamma)
         lambda_scalers = [lam**i for i in range(num_rollouts)]
+        # print(lambda_scalers)
         normalizing_factor = sum(lambda_scalers)
         scaled_rollouts = [norm * rval for norm, rval in zip(rollout_values, lambda_scalers)]
+        # print(scaled_rollouts)
         lamda_estimate = sum(scaled_rollouts) / normalizing_factor
         return lamda_estimate
     
@@ -205,6 +261,7 @@ class Composer:
             for i in range(num_rollouts):
                 # print(f"Doing rollout {i}")
                 # Get the q_value
+                # state_value = self.get_softmax_value(self, state, self.temperature)
                 q_value = self.q_agent.get_qvalue(current_state, next_action)
 
                 model_prediction = self.world_model.get_prediction(current_state, next_action)
@@ -212,6 +269,7 @@ class Composer:
                 # Calculate this rollout's value.
                 ### We're updating it so that it takes termination into account
                 rollout_value = discounted_reward_so_far + (current_discount * q_value)
+                # rollout_value = discounted_reward_so_far + (current_discount * state_value)
                 # rollout_value = discounted_reward_so_far + (chance_unterminated * current_discount * q_value)
                 rollout_values.append(rollout_value.item())
 
