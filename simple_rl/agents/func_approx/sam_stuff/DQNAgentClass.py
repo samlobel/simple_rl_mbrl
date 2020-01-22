@@ -132,6 +132,16 @@ class WorldModel(nn.Module):
         """
         Unfortunately, needs to handle numpy arrays AND torch things.
         AND ints/lazy-states.
+
+        Before it was working on a single state. We don't want to break that,
+        we just want it to work with both.
+
+        So in general, I think I want "actions" to be passed in as integers,
+        having empty shape. And for multiple states, I want actions to b
+
+        So pretty much, we get the sizings. We unsqueeze the actions until they're
+        3 dim, and unsqueeze the states until they're 2. 
+
         """
         # Should work in similar circumstances to "dqn_agent.act"
         # We're assuming 'action' is a simple integer...
@@ -151,14 +161,43 @@ class WorldModel(nn.Module):
         else:
             action = torch.from_numpy(np.asarray(action))
 
-        state = state.float().unsqueeze(0).to(self.device)
-        action = action.long().unsqueeze(0).unsqueeze(0).to(self.device)
+        # print('bingham dino')
+        # import pdb; pdb.set_trace()
+
+        state = state.float()
+        if len(state.shape) > 2:
+            raise Exception("BANG!")
+        num_state_dims_added = 0
+        while len(state.shape) < 2:
+            num_state_dims_added += 1
+            state = state.unsqueeze(0)
+        state = state.to(self.device)
+
+        # This makes it just a list of integers always.
+        action = action.long()
+        if len(action.shape) > 1:
+            raise Exception("BONG!")
+        num_action_dims_added = 0
+        while len(action.shape) < 1:
+            num_action_dims_added += 1
+            action = action.unsqueeze(0)
+        action = action.to(self.device)
+
+        # state = state.float().unsqueeze(0).to(self.device)
+        # action = action.long().unsqueeze(0).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
-            next_state = self.transition_model(state, action).squeeze()
-            reward = self.reward_model(state, action).squeeze()
-            termination = self.termination_model(state, action, mode="probs").squeeze()
+            next_state = self.transition_model(state, action)
+            reward = self.reward_model(state, action)
+            termination = self.termination_model(state, action, mode="probs")
+            # next_state = self.transition_model(state, action).squeeze()
+            # reward = self.reward_model(state, action).squeeze()
+            # termination = self.termination_model(state, action, mode="probs").squeeze()
 
+        for _ in range(num_state_dims_added):
+            next_state = next_state.squeeze(0)
+            reward = reward.squeeze(0)
+            termination = termination.squeeze(0)
 
         return dict(
             next_state=next_state,
@@ -334,7 +373,7 @@ class DQNAgent(Agent, nn.Module):
 
         self.policy_network.train()
 
-        action_values = action_values.cpu().data.numpy()
+        action_values = action_values.cpu().data.numpy().copy()
 
         # Epsilon-greedy action selection
         if random.random() > epsilon:
@@ -375,7 +414,7 @@ class DQNAgent(Agent, nn.Module):
         action_values = self.get_qvalues(state)
 
         # Argmax only over actions that can be implemented from the current state
-        return np.max(action_values.cpu().data.numpy())
+        return np.max(action_values.cpu().data.numpy().copy())
 
     def get_softmax_values(self, state, temperature=None):
         """
@@ -403,11 +442,14 @@ class DQNAgent(Agent, nn.Module):
         action_values_for_value = self.get_qvalues(state, network_name="target")
         # action_values_for_value = self.get_qvalues(state, network_name="policy")
 
+        # print(f"HEELO: {action_values_for_prob}    {action_values_for_value}")
+        # print(action_values_for_prob - action_values_for_value)
+
         weighted_values = action_values_for_value * probability # elem-wise
         summed_weighted_values = weighted_values.sum(dim=-1)
 
         return summed_weighted_values
-        # return summed_weighted_values.cpu().data.numpy()
+        # return summed_weighted_values.cpu().data.numpy().copy()
 
     def get_softmax_action(self, state, temperature=None):
         """
@@ -423,7 +465,10 @@ class DQNAgent(Agent, nn.Module):
 
         temperatured_action_values = action_values / temperature
         probability = F.softmax(temperatured_action_values, dim=-1)
-        return torch.multinomial(probability, num_samples=1).unsqueeze(-1)
+
+        # import pdb; pdb.set_trace()
+
+        return torch.multinomial(probability, num_samples=1).squeeze(-1)
 
     def get_qvalue(self, state, action_idx):
         # This one sort of makes sense it's only one state. Although,
@@ -519,10 +564,11 @@ class DQNAgent(Agent, nn.Module):
                 if self.use_softmax_target:
                     state_values = self.get_softmax_values(states)
                     # This used to be very bad in that it was the wrong dimensionality.
-                    state_values = state_values.unsqueeze(1)
+                    # state_values = state_values.unsqueeze(1)
                 else:
                     selected_actions = self.policy_network(states).argmax(dim=1).unsqueeze(1)
                     state_values = self.target_network(states).detach().gather(1, selected_actions)
+                    state_values = state_values.squeeze(1)
             self.policy_network.train()
             return state_values.detach()
         else:
@@ -530,7 +576,7 @@ class DQNAgent(Agent, nn.Module):
             # I feel like there's a whole lot of re-doing of turning off gradients.
             # That's a problem for later though.
 
-    def _learn(self, experiences, gamma, Q_targets_next=None):
+    def _learn(self, experiences, gamma):
         """
         Update value parameters using given batch of experience tuples.
         Args:
@@ -544,6 +590,8 @@ class DQNAgent(Agent, nn.Module):
 
         Q_targets_next = self._get_state_values(next_states)
 
+
+
         # Options in SMDPs can take multiple steps to terminate, the Q-value needs to be discounted appropriately
         discount_factors = gamma ** steps
 
@@ -552,10 +600,21 @@ class DQNAgent(Agent, nn.Module):
         # Q_targets = rewards + (discount_factors * Q_targets_next * (1 - dones))
         # If you just timed out, you should still do the Q-targets_next thing.
         truly_dones = dones * (1 - time_limit_truncateds)
+
+        # import ipdb; ipdb.set_trace()
+        # print(truly_dones)
+
+        # print("bingity boppidy")
+        # import ipdb; ipdb.set_trace()
+        # print("bingity boppidy")
+
+
         Q_targets = rewards + (discount_factors * Q_targets_next * (1 - truly_dones))
 
+
+
         # Get expected Q values from local model
-        Q_expected = self.policy_network(states).gather(1, actions)
+        Q_expected = self.policy_network(states).gather(1, actions.unsqueeze(1)).squeeze(1)
 
         # Compute loss
         if self.loss_function == "huber":
@@ -668,39 +727,67 @@ class OnlineComposer(DQNAgent):
     so that we value previous ones less. And use a buffer.
     """
 
-    def __init__(self, *args, world_model=None, num_rollouts=5, mixing_speed=0.95, **kwargs):
+    def __init__(self, *args, world_model=None, num_rollouts=5,
+        mixing_speed=0.999, **kwargs):
         """
         Okay, how should we be initializing? We need a starting bias and covariance.
         We also need a mixing speed, and a way to do the averaging.
         """
+        print("Setting use_softmax_target to True by default. Because we're composing.")
+        kwargs['use_softmax_target'] = True
         super(OnlineComposer, self).__init__(*args, **kwargs)
 
         self.world_model = world_model
         self.num_rollouts = num_rollouts
 
+        self.episode_number = 0
         self.episode_buffer = []
         # This should look familiar...
         self.episode_experience = namedtuple("Experience", field_names=["state", "action", "reward", "next_state", "done", "num_steps", "time_limit_truncated"])
 
+        # Maybe I should catch the biases up first?
         self.biases = np.zeros((num_rollouts,))
         self.covariances = np.eye(num_rollouts, dtype=np.float32)
 
-        self.weights = np.ones((num_rollouts)) / num_rollouts # Let's start with just the Q
+        self.weights = np.zeros((num_rollouts,), np.float32)
+        self.weights[0] = 1.0
+        # self.weights = np.ones((num_rollouts)) / num_rollouts # Let's start with just the Q
 
-        self.mixing_speed = mixing_speed #0.95 # Something like a half life of 14....
+        # We're actually going to change this, to interpolate on a per-step basis,
+        # versus a per-episode basis. Because the other way gives priority to
+        # shitty episodes, which I bet is part of the problem.
+        # self.mixing_speed = mixing_speed #0.95 # Something like a half life of 14....
+        self.mixing_speed = mixing_speed # 0.999 is 700 steps, which should be like 30 episodes for a while.
+        
+        import math
+        half_life = math.log(0.5) / math.log(self.mixing_speed)
+        cprint(f"The half life at mixing speed {mixing_speed} is {half_life}", "green")
+        # exit()
+
 
 
     # def forward(self, *args, **kwargs):
     #     pass
+
+    def _log_score(self, episode_buffer):
+        # if self.tensor_log:
+        #     score = sum([exp.reward for exp in episode_buffer])
+        #     self.writer.add_scalar("Score", 0, self.episode_number)
+        #     print("Logging Score?")
+
+        pass
 
     def step(self, state, action, reward, next_state, done, num_steps=1, time_limit_truncated=False):
         exp = self.episode_experience(state, action, reward, next_state, done, num_steps, time_limit_truncated)
         self.episode_buffer.append(exp)
         if exp.done:
             print("Updating weight!")
+            self._log_score(self.episode_buffer)
             self._update_weights(self.episode_buffer)
+
+            self.episode_number += 1
             self.episode_buffer = []
-            print(self.weights)
+            print(f"W: {self.weights} B: {self.biases}")
         self.world_model.step(state, action, reward, next_state, done, num_steps=1, time_limit_truncated=False)
         # This step calls "learn" sometimes. That's good, we need to overwrite that though....
         super(OnlineComposer, self).step(state, action, reward, next_state, done, num_steps=num_steps, time_limit_truncated=time_limit_truncated)
@@ -715,16 +802,22 @@ class OnlineComposer(DQNAgent):
         This is actually all I need to update if I
         want to replace the existing update with this.
 
-        Really make sure that it's 32 x 1 or whatever.
-
+        Make sure that it's shape [32] or whater
+        
         NOTE: This returns a numpy array, but that should maybe be alright given how it's used.
         """
-        print('bingster!!!!')
-        import pdb; pdb.set_trace()
+
+        assert len(states.shape) == 2, states.shape
+
+        # print('bingster!!!!')
+        # import ipdb; ipdb.set_trace()
         all_estimates = self._get_values_for_rollouts(states)
         debiased_estimates = all_estimates - self.biases # This may need some broadcast support
         weighted_estimates = all_estimates @ self.weights.T
+        weighted_estimates = weighted_estimates.squeeze(1)
         # weighted_estimates = np.squeeze(weighted_estimates, axis=1)
+        weighted_estimates = torch.from_numpy(weighted_estimates).float().to(self.device)
+
         return weighted_estimates
 
     # def _get_weighted_state_values(self, states):
@@ -769,10 +862,15 @@ class OnlineComposer(DQNAgent):
         # First, assert that the last one is "done"
         assert episode[-1].done == True, f"last one needs to be done, instead {episode[-1].done}"
         values = []
+
+        # import ipdb; ipdb.set_trace()
+
         for exp in reversed(episode):
             if exp.done:
                 if exp.time_limit_truncated:
-                    last_value = self.q_agent.get_softmax_value(exp.next_state)
+                    last_value = self.get_softmax_values(exp.next_state).item()
+                    # import pdb; pdb.set_trace()
+                    # print('gaaahhh')
                     # import ipdb; ipdb.set_trace()
                     # print('singer')
                 else:
@@ -794,12 +892,17 @@ class OnlineComposer(DQNAgent):
         That involves making it a torch tensor for sure. This will be called only
         internally, so we can make sure that's true elsewhere.
 
+        Returns a numpy array I guess. It could return a tensor, but
+        what would the point be.
+
         """
 
         num_rollouts = self.num_rollouts
         gamma = self.gamma
 
         rollout_values = []
+        # import pdb; pdb.set_trace()
+
         assert len(states.shape) == 2
         batch_size = states.shape[0]
         # batch_size = len(states) # I think that's fine.
@@ -807,8 +910,8 @@ class OnlineComposer(DQNAgent):
 
 
         with torch.no_grad():
-            discounted_reward_so_far = torch.zeros((batch_size), dtype=torch.float32)
-            current_discounts = torch.ones((batch_size), dtype=torch.float32)
+            discounted_rewards_so_far = torch.zeros((batch_size), dtype=torch.float32).to(self.device)
+            current_discounts = torch.ones((batch_size), dtype=torch.float32).to(self.device)
             current_states = states
  
             # discounted_reward_so_far = 0
@@ -819,31 +922,47 @@ class OnlineComposer(DQNAgent):
             for i in range(num_rollouts):
                 # print(f"Doing rollout {i}")
                 # Get the q_value
-                q_value = self.get_softmax_value(current_states)
+                q_value = self.get_softmax_values(current_states)
+
                 next_actions = self.get_softmax_action(current_states, self.temperature)
+                # next_actions is going to be a [1,0,1,0,1] type of array
+                # import pdb; pdb.set_trace()
 
                 model_prediction = self.world_model.get_prediction(current_states, next_actions)
 
                 # Calculate this rollout's value.
                 ### We're updating it so that it takes termination into account
-                rollout_value = discounted_reward_so_far + (current_discount * q_value)
-                rollout_values.append(rollout_value)
+                rollout_value = discounted_rewards_so_far + (current_discounts * q_value)
+                rollout_values.append(rollout_value.cpu().data.numpy().copy())
 
                 # Accumulate reward
-                discounted_reward_so_far += (model_prediction['reward'] * current_discount)
+
+                # print("Let's check all the things for shape")
+                # import ipdb; ipdb.set_trace()
+                # print("Let's check all the things for shape")
+
+                discounted_rewards_so_far += (model_prediction['reward'] * current_discounts)
 
                 # Now that we've added reward, update discount,
-                current_discount *= gamma
+                current_discounts *= gamma
                 # Related: update chance untermiated
 
-                current_discount *= (1 - model_prediction['termination'])
+                current_discounts *= (1 - model_prediction['termination'])
 
                 # Set next state and action.
                 current_states = model_prediction['next_state']
                 # current_state = self.t_network(current_state, next_action)
                 # next_action = self.q_agent.get_best_action(current_state)
         
-        return np.asarray(rollout_values)
+        # print('wowza')
+        # import ipdb; ipdb.set_trace()
+
+        # This is supposed to be like 32 x 5, or something.
+        to_return = np.asarray(rollout_values)
+        to_return = to_return.T
+        return to_return
+
+        # return np.asarray(rollout_values).T
 
     def _calculate_bias_for_rollouts(self, all_estimates, true_values):
         """
@@ -854,10 +973,15 @@ class OnlineComposer(DQNAgent):
             true_values:
                 All of the true target values. Equivalent to `Y`
         """
-        true_values = np.asarray(true_values)
+
+        # cprint("This is seriously wrong at the moment. Damn shapes...", "red")
+
+        # import ipdb; ipdb.set_trace()
+
+        # true_values = np.asarray(true_values)
         true_values = true_values.reshape(-1, 1) # So you can subtract it...
         # true_values = np.expand_dims(true_values, -1) # So you can subtract it...
-        all_estimates = np.asarray(all_estimates)
+        # all_estimates = np.asarray(all_estimates)
         difference_matrix = all_estimates - true_values
         bias = difference_matrix.mean(axis=0)  # This is what you have to SUBTRACT!
         # print(f"Size of bias is {bias}")
@@ -869,21 +993,22 @@ class OnlineComposer(DQNAgent):
 
         NOTE: The estimates are not debiased yet.
         """
-        cprint("Not really sure about this ATM","red")
+        # cprint("Not really sure about this ATM","red")
 
         num_samples = len(all_estimates)
 
         # true values is the real Q value given the data. Should be unbiased.
-        true_values = np.asarray(true_values)
+        # true_values = np.asarray(true_values)
         true_values = true_values.reshape(-1, 1) # So you can subtract it...
         debiased_estimates = all_estimates - self.biases
 
-        print("get the shapes you dignus")
-        import pdb; pdb.set_trace()
+        # print("get the shapes you dignus")
+        # import ipdb; ipdb.set_trace()
+        # print("get the shapes you dignus")
 
         covariance = debiased_estimates.T @ debiased_estimates
         covariance = covariance / num_samples
-        print(f"Shape of covariance is {covariance.shape}")
+        # print(f"Shape of covariance is {covariance.shape}")
 
         assert covariance.shape == (len(all_estimates[0]), len(all_estimates[0]))
         return covariance
@@ -910,6 +1035,12 @@ class OnlineComposer(DQNAgent):
         assert len(cov.shape) == 2
         assert cov.shape[0] == cov.shape[1] == self.num_rollouts
 
+        # print(cov)
+        cprint("Doing bad thing here", "red")
+        cov = cov + np.eye(self.num_rollouts)
+
+        # print("For now, goign to add the identity to the cov matrix.")
+
         ones = np.ones((1,self.num_rollouts,), dtype=np.float32)
         inv_cov = np.linalg.inv(cov)
 
@@ -921,16 +1052,22 @@ class OnlineComposer(DQNAgent):
         """Updates bias, weight, and covariance"""
 
         # This should use global bias.
-        cprint("Currently this is wrong, because it doesn't do the bias correctly.", "red")
+        # cprint("Currently this is wrong, because it doesn't do the bias correctly.", "red")
         gamma = self.gamma
-
+        episode_length = len(experiences)
+        print(f"Number of things in episode: {episode_length}")
+        mixing_amount = self.mixing_speed ** episode_length
+        print(f"So we're going to mix by {mixing_amount}")
 
         num_rollouts = self.num_rollouts
 
         states = [exp.state for exp in experiences]
-        actions = [exp.action for exp in experiences]
+        states = torch.from_numpy(np.asarray(states)).to(self.device)
+
+        # actions = [exp.action for exp in experiences]
 
         true_values = self._get_true_state_values(experiences, gamma=gamma)
+        # print('from here')
         all_estimates = self._get_values_for_rollouts(states)
         # all_estimates = self.create_rollout_matrix_from_data(
         #     states, actions, num_rollouts, true_values, gamma=gamma)
@@ -938,12 +1075,17 @@ class OnlineComposer(DQNAgent):
         # import ipdb; ipdb.set_trace()
 
         bias_est = self._calculate_bias_for_rollouts(all_estimates, true_values)
-        self.biases = self.mixing_speed * self.biases + (1 - self.mixing_speed) * bias_est
+        self.biases = mixing_amount * self.biases + (1 - mixing_amount) * bias_est
+
 
         covariance_est = self._calculate_covariance_for_rollouts(all_estimates, true_values)
-        self.covariances = self.mixing_speed * self.covariances + (1 - self.mixing_speed) * covariance_est
+        self.covariances = mixing_amount * self.covariances + (1 - mixing_amount) * covariance_est
 
         self.weights = self._calculate_weight_from_covariance(self.covariances)
+
+        # print("once more shapes")
+        # import ipdb; ipdb.set_trace()
+        # print("once more shapes")
 
 
         # debiased_estimates = all_estimates - self.biases

@@ -372,20 +372,26 @@ def train(agent, mdp, episodes, steps, init_episodes=10, evaluate_every=25, *, s
     last_save = time.time()
 
     ## Commenting this out for now while we switch to something more reasonable.
-    evaluator = Evaluator(mdp, composer, num_runs_each=5, rollout_depth=5, logdir=logdir)
+    if composer:
+        evaluator = Evaluator(mdp, composer, num_runs_each=5, rollout_depth=5, logdir=logdir)
 
     for episode in range(episodes):
 
         if evaluate_every > 0 and episode % evaluate_every == 0 and episode != 0:
             print(f"Evaluating on episode {episode}")
-            test_optimal(composer.q_agent, mdp)
+            test_optimal(agent, mdp)
+            # test_optimal(composer.q_agent, mdp)
             # test_optimal(agent, mdp)
             # print("just kidding")
             # evaluator._set_bias_variance(10)
-            evaluator._set_bias_variance(10)
-            evaluator.evaluate_different_models(training_steps=episode)
-            print("At some point definitely make this a CL-Arg")
-            evaluator.write_graphs()
+
+
+            # if composer:
+            #     print("Shouldn't be here?")
+            #     evaluator._set_bias_variance(10)
+            #     evaluator.evaluate_different_models(training_steps=episode)
+            #     print("At some point definitely make this a CL-Arg")
+            #     evaluator.write_graphs()
 
         if time.time() - last_save > save_every:
             print("Saving Model")
@@ -419,16 +425,18 @@ def train(agent, mdp, episodes, steps, init_episodes=10, evaluate_every=25, *, s
                 num_steps=1, time_limit_truncated=next_state.is_time_limit_truncated())
             agent.update_epsilon()
 
-            world_model.step(state.features(), action, reward, next_state.features(), next_state.is_terminal(),
-                num_steps=1, time_limit_truncated=next_state.is_time_limit_truncated())
+            if world_model:
+                world_model.step(state.features(), action, reward, next_state.features(), next_state.is_terminal(),
+                    num_steps=1, time_limit_truncated=next_state.is_time_limit_truncated())
 
             state = next_state
             score += reward
-            if agent.tensor_log:
-                agent.writer.add_scalar("Score", score, iteration_counter)
 
             game_over = mdp.game_over if hasattr(mdp, 'game_over') else False
             if state.is_terminal() or game_over:
+                if agent.tensor_log:
+                    print("Is this happening too?")
+                    agent.writer.add_scalar("Score", score, episode)
                 break
 
         last_10_scores.append(score)
@@ -520,6 +528,8 @@ if __name__ == '__main__':
     parser.add_argument("--learning_rate", default=1e-3, type=float, help='What do you think!')
     parser.add_argument("--tau", default=1e-3, type=float, help='Target copying rate')
     parser.add_argument("--evaluate_every", default=25, type=int, help='Expensive evaluation step for tracking')
+    parser.add_argument("--use_online_composer", default=False, action="store_true", help='If you include this option, the model is used to make more accurate Q updates')
+    parser.add_argument("--num_rollouts", default=5, type=int, help='Only used if use_online_composer')
     # parser.add_argument("--use_world_model", default=False, action='store_true', help="Include this option if you want to see how a world model trains.")
     args = parser.parse_args()
 
@@ -545,31 +555,60 @@ if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # device = torch.device("cpu")
 
-    ddqn_agent = DQNAgent(state_size=state_dim, action_size=action_dim,
+
+    if args.use_online_composer:
+        world_model = WorldModel(state_size=state_dim, action_size=action_dim,
+                            seed=args.seed, device=device,
+                            name="WorldModel", lr=args.learning_rate, tensor_log=args.tensor_log,# use_double_dqn=True,
+                            # writer = agent.writer, # Because I'm concerned it's over-writing...
+                            #exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
+                            #evaluation_epsilon=args.eval_eps,
+                            #epsilon_linear_decay=args.epsilon_linear_decay
+                            )
+
+        agent = OnlineComposer(
+                        world_model=world_model, num_rollouts=args.num_rollouts,
+                        state_size=state_dim, action_size=action_dim,
                         seed=args.seed, device=device,
-                        name="GlobalDDQN",
+                        name="OnlineComposer",
+                        mixing_speed=0.9999,
                         lr=args.learning_rate, tau=args.tau,
                         tensor_log=args.tensor_log, use_double_dqn=True,
+                        writer = world_model.writer, # Because I'm concerned it's oevr-writing.
                         exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
                         evaluation_epsilon=args.eval_eps,
                         epsilon_linear_decay=args.epsilon_linear_decay,
                         use_softmax_target=args.use_softmax_target)
 
-    world_model = WorldModel(state_size=state_dim, action_size=action_dim,
-                        seed=args.seed, device=device,
-                        name="WorldModel", lr=args.learning_rate, tensor_log=args.tensor_log,# use_double_dqn=True,
-                        writer = ddqn_agent.writer, # Because I'm concerned it's over-writing...
-                        #exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
-                        #evaluation_epsilon=args.eval_eps,
-                        #epsilon_linear_decay=args.epsilon_linear_decay
-                        )
+        world_model = None
+        composer = None
+    
+    else:
+        agent = DQNAgent(state_size=state_dim, action_size=action_dim,
+                            seed=args.seed, device=device,
+                            name="GlobalDDQN",
+                            lr=args.learning_rate, tau=args.tau,
+                            tensor_log=args.tensor_log, use_double_dqn=True,
+                            exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
+                            evaluation_epsilon=args.eval_eps,
+                            epsilon_linear_decay=args.epsilon_linear_decay,
+                            use_softmax_target=args.use_softmax_target)
+
+        world_model = WorldModel(state_size=state_dim, action_size=action_dim,
+                            seed=args.seed, device=device,
+                            name="WorldModel", lr=args.learning_rate, tensor_log=args.tensor_log,# use_double_dqn=True,
+                            writer = agent.writer, # Because I'm concerned it's over-writing...
+                            #exploration_method=args.exploration_method, pixel_observation=args.pixel_observation,
+                            #evaluation_epsilon=args.eval_eps,
+                            #epsilon_linear_decay=args.epsilon_linear_decay
+                            )
 
 
-    composer = Composer(
-        q_agent=ddqn_agent,
-        world_model=world_model,
-        action_size=action_dim,
-        device=device)
+        composer = Composer(
+            q_agent=agent,
+            world_model=world_model,
+            action_size=action_dim,
+            device=device)
 
     # data = collect_data_for_bias_variance_calculation(overall_mdp, ddqn_agent, 1)
     # bias, variance = composer.create_bias_variance_from_data(data, 5)
@@ -577,14 +616,14 @@ if __name__ == '__main__':
 
     if args.mode == 'train':
         ddqn_episode_scores, s_ri_buffer = train(
-            ddqn_agent, overall_mdp, args.episodes, args.steps, save_every=args.save_every, logdir=logdir, world_model=world_model,
+            agent, overall_mdp, args.episodes, args.steps, save_every=args.save_every, logdir=logdir, world_model=world_model,
             composer=composer, evaluate_every=args.evaluate_every)
         save_all_scores(args.experiment_name, logdir, args.seed, ddqn_episode_scores)
     elif args.mode == 'view':
         print('waow')
         print(model_save_loc)
-        ddqn_agent.load_state_dict(torch.load(model_save_loc))
-        test_render(ddqn_agent, overall_mdp)
+        agent.load_state_dict(torch.load(model_save_loc))
+        test_render(agent, overall_mdp)
         pass
     elif args.mode == 'hyper':
         from bayes_opt import BayesianOptimization

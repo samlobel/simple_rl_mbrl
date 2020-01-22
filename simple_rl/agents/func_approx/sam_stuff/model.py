@@ -15,18 +15,34 @@ class DenseTerminationModel(nn.Module):
         # This gets reshaped to make a state for every action.
         self.fc3 = nn.Linear(fc2_units, action_size)
 
-    def forward(self, state, action, mode="probs"):
+    def forward(self, states, actions, mode="probs"):
         """
         Predicts termination probability for every action... I think.
         So, we should sigmoid so it's between 0 and 1.
         """
         assert mode in ["logits", "probs"]
+        assert len(states.shape) == 2, states.shape
+        assert len(actions.shape) == 1, actions.shape
 
-        x = F.relu(self.fc1(state))
+
+
+        x = F.relu(self.fc1(states))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         # x = x.view(-1, self.state_size, self.action_size)
-        x = x.gather(1, action)
+
+        # print('Terminal')
+        # import ipdb; ipdb.set_trace()
+        # print('Terminal')
+
+        x = x.gather(1, actions.unsqueeze(1))
+
+        # print("Here we want to return a single number or list of numbers.")
+        # import ipdb; ipdb.set_trace()
+        # print("Here we want to return a single number or list of numbers.")
+
+        x = x.squeeze(1)
+
         # return x
         # x = x[:,action]
         if mode == "logits":
@@ -49,12 +65,20 @@ class DenseTransitionModel(nn.Module):
         # This gets reshaped to make a state for every action.
         self.fc3 = nn.Linear(fc2_units, action_size * state_size)
 
-    def forward(self, state, action):
+    def forward(self, states, actions):
         """
+        input: a LIST of states (dim 2)
+               a LIST of actions (dim 1)
+
         Predicts a state for every action... I think.
+
+        action is going to be a list of integers. It wasn't before but now it is.
         """
 
-        x = F.relu(self.fc1(state))
+        assert len(states.shape) == 2, states.shape
+        assert len(actions.shape) == 1, actions.shape
+
+        x = F.relu(self.fc1(states))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         x = x.view(-1, self.state_size, self.action_size)
@@ -66,7 +90,7 @@ class DenseTransitionModel(nn.Module):
         # print(action_one_hot.shape)
         # to_return_onehot = x.bmm(action_one_hot)
 
-        for_gather = action.unsqueeze(1).expand(-1,self.state_size,-1)
+        for_gather = actions.unsqueeze(-1).unsqueeze(-1).expand(-1,self.state_size,-1)
         after_gather = x.gather(2, for_gather).squeeze(-1)
         # print(after_gather.shape)
         return after_gather
@@ -83,15 +107,30 @@ class DenseRewardModel(nn.Module):
         # This gets reshaped to make a state for every action.
         self.fc3 = nn.Linear(fc2_units, action_size)
 
-    def forward(self, state, action):
+    def forward(self, states, actions):
         """
         Predicts a reward for every action... I think.
+
+        It's going to take in a LIST of states and actions. Always.
         """
-        x = F.relu(self.fc1(state))
+
+        assert len(states.shape) == 2, states.shape
+        assert len(actions.shape) == 1, actions.shape
+
+        x = F.relu(self.fc1(states))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         # Expects something like 32,1. It's sort of like where to pluck...
-        x = x.gather(1, action)
+
+        # print('rewarding!')
+        # import ipdb; ipdb.set_trace()
+        # print('rewarding')
+
+
+        x = x.gather(1, actions.unsqueeze(1))
+
+        x = x.squeeze(1)
+
         return x
 
 

@@ -69,7 +69,10 @@ class ReplayBuffer:
         else:
             states = torch.from_numpy(np.vstack([e.state for e in experiences if e is not None])).float().to(self.device)
         actions = torch.from_numpy(np.vstack([e.action for e in experiences if e is not None])).long().to(self.device)
+        from termcolor import colored, cprint
+        # cprint(f"Action shape: {actions.shape}", "red")
         rewards = torch.from_numpy(np.vstack([e.reward for e in experiences if e is not None])).float().to(self.device)
+        # cprint(f"Reward shape: {rewards.shape}", "red")
         if self.pixel_observation:
             next_states = torch.from_numpy(np.vstack([e.next_state[None, ...] for e in experiences if e is not None])).float().to(self.device)
         else:
@@ -77,6 +80,12 @@ class ReplayBuffer:
         dones = torch.from_numpy(np.vstack([e.done for e in experiences if e is not None]).astype(np.uint8)).float().to(self.device)
         steps = torch.from_numpy(np.vstack([e.num_steps for e in experiences if e is not None])).float().to(self.device)
         time_limit_truncateds = torch.from_numpy(np.vstack([e.time_limit_truncated for e in experiences if e is not None]).astype(np.uint8)).float().to(self.device)
+
+        actions = actions.squeeze(1)
+        rewards = rewards.squeeze(1)
+        dones = dones.squeeze(1)
+        time_limit_truncateds = time_limit_truncateds.squeeze(1)
+        steps = steps.squeeze(1)
 
         return states, actions, rewards, next_states, dones, steps, time_limit_truncateds
 
